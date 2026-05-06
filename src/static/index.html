@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Finance Tracker</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen" class="screen hidden">
+  <div class="login-box">
+    <div class="login-icon">💰</div>
+    <h1>Finance Tracker</h1>
+    <p>Sign in with the same Telegram account that uses
+       <a id="bot-link" href="#" target="_blank">@Money_trackeer_bot</a>.</p>
+    <div id="telegram-login-widget"></div>
+    <p class="muted small">
+      Your login is verified by the bot. Only the allowed user can sign in.
+    </p>
+  </div>
+</div>
+
+<!-- Dashboard (W0 placeholder) -->
+<div id="dashboard" class="screen hidden">
+  <header>
+    <div class="header-left">
+      <span class="header-icon">💰</span>
+      <span class="header-title">Finance Tracker</span>
+    </div>
+    <div class="header-right">
+      <div class="user-info">
+        <span id="user-name"></span>
+      </div>
+      <button id="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <div class="card">
+      <h2>You're signed in 👋</h2>
+      <p>Hi <strong id="hello-name"></strong>! W0 is just the login + auth handshake.</p>
+      <p class="muted">Coming soon:</p>
+      <ul>
+        <li><strong>W1</strong> — net worth, wallet balances, monthly category spend, recent transactions</li>
+        <li><strong>W2</strong> — full transactions table with filters</li>
+        <li><strong>W3</strong> — items + price-history charts across places</li>
+        <li><strong>W4</strong> — edit/create from the web (read-write)</li>
+      </ul>
+      <p class="muted small">
+        For now keep using <a href="https://t.me/Money_trackeer_bot" target="_blank">the bot</a> for new transactions.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Profile</h3>
+      <div class="kv"><span>User ID</span><strong id="profile-user-id">—</strong></div>
+      <div class="kv"><span>Language</span><strong id="profile-language">—</strong></div>
+      <div class="kv"><span>Timezone</span><strong id="profile-timezone">—</strong></div>
+      <div class="kv"><span>Salary day</span><strong id="profile-salary-day">—</strong></div>
+      <div class="kv"><span>Joined</span><strong id="profile-created">—</strong></div>
+    </div>
+  </main>
+
+  <footer class="muted small">
+    finance-web · W0 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
+  </footer>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

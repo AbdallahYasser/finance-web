@@ -1,0 +1,19 @@
+services:
+  finance-web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "8080"
+    networks:
+      - coolify
+    volumes:
+      # Read-only bind-mount of finance-bot's Coolify-managed Docker volume.
+      # Both apps reach the same SQLite file; WAL mode handles concurrent reads.
+      # When W4 needs writes, drop the ":ro" suffix.
+      - /var/lib/docker/volumes/h84occok4wk4gs4888woc8kc_finance-bot-data/_data:/app/data:ro
+
+networks:
+  coolify:
+    external: true
+    name: coolify
