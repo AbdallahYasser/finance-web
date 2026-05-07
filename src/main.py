@@ -15,6 +15,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src import auth, config, db
+from src.queries import wallets as q_wallets
+from src.queries import transactions as q_tx
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -85,6 +87,26 @@ async def me(user_id: int = Depends(auth.get_current_user)):
         "timezone": user.get("timezone") or "Africa/Cairo",
         "salary_day": user.get("salary_day"),
         "created_at": user.get("created_at") or "",
+    }
+
+
+@app.get("/api/dashboard")
+async def dashboard(user_id: int = Depends(auth.get_current_user)):
+    """Composite payload — one round-trip for the whole W1 dashboard."""
+    wallets = await q_wallets.list_with_balances()
+    net_worth = await q_wallets.net_worth_cents()
+    by_category = await q_tx.this_month_by_category()
+    month_total = sum(r["total_cents"] for r in by_category)
+    recent = await q_tx.recent(limit=20)
+
+    return {
+        "net_worth_cents": net_worth,
+        "wallets": wallets,
+        "this_month": {
+            "total_cents": month_total,
+            "by_category": by_category,
+        },
+        "recent_transactions": recent,
     }
 
 

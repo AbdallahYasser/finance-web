@@ -1,6 +1,7 @@
 :root {
   --bg: #0f172a;
   --bg-elev: #1e293b;
+  --bg-elev-2: #243049;
   --border: #334155;
   --text: #e2e8f0;
   --muted: #94a3b8;
@@ -8,6 +9,7 @@
   --accent-hover: #0ea5e9;
   --danger: #ef4444;
   --good: #22c55e;
+  --warn: #f59e0b;
 }
 
 * { box-sizing: border-box; }
@@ -29,7 +31,7 @@ a:hover { color: var(--accent-hover); }
 .muted  { color: var(--muted); }
 .small  { font-size: 13px; }
 
-/* ---------- Login screen ---------- */
+/* ---------- Login ---------- */
 
 #login-screen {
   min-height: 100vh;
@@ -55,7 +57,7 @@ a:hover { color: var(--accent-hover); }
 
 #telegram-login-widget { display: flex; justify-content: center; margin: 16px 0; }
 
-/* ---------- Dashboard ---------- */
+/* ---------- Dashboard layout ---------- */
 
 #dashboard { min-height: 100vh; display: flex; flex-direction: column; }
 
@@ -75,7 +77,7 @@ header {
 .header-icon { font-size: 22px; }
 
 .header-right {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 12px;
 }
 
 .user-info { color: var(--muted); font-size: 14px; }
@@ -91,14 +93,31 @@ button {
 }
 button:hover { background: #475569; }
 
+#refresh-btn {
+  font-size: 16px;
+  padding: 4px 10px;
+}
+#refresh-btn.spinning { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .content {
   flex: 1;
   padding: 24px;
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto;
   width: 100%;
   display: grid;
   gap: 20px;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 800px) {
+  .grid-two { grid-template-columns: 1fr; }
 }
 
 .card {
@@ -108,21 +127,127 @@ button:hover { background: #475569; }
   padding: 20px 24px;
 }
 
-.card h2 { margin: 0 0 8px; }
-.card h3 { margin: 0 0 16px; font-size: 16px; color: var(--muted); }
-.card p  { margin: 0 0 12px; color: var(--text); }
-.card ul { margin: 0 0 12px 18px; padding: 0; color: var(--muted); }
-.card li { margin: 4px 0; }
-
-.kv {
+.card h3 {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   display: flex;
   justify-content: space-between;
-  padding: 6px 0;
+  align-items: baseline;
+}
+
+/* ---------- Net worth ---------- */
+
+.net-worth-card {
+  text-align: center;
+  background: linear-gradient(180deg, var(--bg-elev) 0%, var(--bg-elev-2) 100%);
+}
+.net-worth-label {
+  color: var(--muted);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.net-worth-value {
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -1px;
+}
+.net-worth-sub { margin-top: 6px; }
+
+/* ---------- Wallets ---------- */
+
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.wallet-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
-.kv:last-child { border-bottom: 0; }
-.kv span { color: var(--muted); }
-.kv strong { font-weight: 500; }
+.wallet-row:last-child { border-bottom: 0; }
+
+.wallet-name { display: flex; align-items: center; gap: 8px; }
+.wallet-icon { font-size: 18px; }
+.wallet-balance { font-variant-numeric: tabular-nums; }
+.wallet-balance.negative { color: var(--danger); }
+
+/* ---------- Month bars ---------- */
+
+.month-total {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bars { display: flex; flex-direction: column; gap: 10px; }
+
+.bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bar-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.bar-cat { color: var(--text); }
+.bar-amt { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar-track {
+  background: var(--bg);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+}
+.bar-fill {
+  background: var(--accent);
+  height: 100%;
+  border-radius: 4px;
+}
+
+/* ---------- Transactions list ---------- */
+
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tx-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+.tx-row:last-child { border-bottom: 0; }
+
+.tx-icon { font-size: 22px; line-height: 1; min-width: 32px; text-align: center; }
+
+.tx-mid .tx-line1 { font-size: 14px; }
+.tx-mid .tx-line2 { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tx-mid .tx-note  { color: var(--muted); font-style: italic; }
+
+.tx-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
+}
+.tx-amount.minus { color: var(--danger); }
+.tx-amount.plus  { color: var(--good); }
+.tx-amount.transfer { color: var(--warn); }
 
 footer {
   text-align: center;
@@ -134,4 +259,5 @@ footer {
   .content { padding: 16px; }
   .card { padding: 16px; }
   header { padding: 12px 16px; }
+  .net-worth-value { font-size: 32px; }
 }
