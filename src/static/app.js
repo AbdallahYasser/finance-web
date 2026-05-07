@@ -1,21 +1,19 @@
-// finance-web W1 — login + read-only dashboard.
+// finance-web W2 — login + dashboard + transactions table.
 
 let CONFIG = null;
 let ME = null;
+let LOOKUPS = null;
 
 const TYPE_ICONS = {
-  cash: '💵',
-  bank: '🏦',
-  e_wallet: '📱',
-  asset_gold: '🥇',
+  cash: '💵', bank: '🏦', e_wallet: '📱', asset_gold: '🥇',
 };
 
-// ---------- Helpers ----------
+// ---------- Generic helpers ----------
 
+function $(id) { return document.getElementById(id); }
 function show(id) {
-  document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('dashboard').classList.add('hidden');
-  document.getElementById(id).classList.remove('hidden');
+  ['login-screen', 'app'].forEach(s => $(s).classList.add('hidden'));
+  $(id).classList.remove('hidden');
 }
 
 async function fetchJSON(url, opts) {
@@ -26,6 +24,12 @@ async function fetchJSON(url, opts) {
     throw err;
   }
   return res.json();
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function fmtAmount(cents) {
@@ -39,17 +43,13 @@ function fmtAmount(cents) {
 
 function fmtDateRelative(iso) {
   if (!iso) return '—';
-  // Accept "YYYY-MM-DDTHH:MM:SSZ" or "YYYY-MM-DD HH:MM:SS"
   const normalized = iso.replace(' ', 'T').replace(/Z?$/, 'Z');
   const dt = new Date(normalized);
   if (isNaN(dt.getTime())) return iso.slice(0, 10);
-
   const now = new Date();
-  // Compute calendar-day delta in local tz
   const dtDate = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
   const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const days = Math.round((todayDate - dtDate) / 86400000);
-
   if (days === 0) {
     const hh = String(dt.getHours()).padStart(2, '0');
     const mm = String(dt.getMinutes()).padStart(2, '0');
@@ -57,8 +57,18 @@ function fmtDateRelative(iso) {
   }
   if (days === 1) return 'yesterday';
   if (days >= 2 && days <= 6) return `${days} days ago`;
-  // ISO date
   return dt.toISOString().slice(0, 10);
+}
+
+function fmtDateAbsolute(iso) {
+  if (!iso) return '—';
+  const normalized = iso.replace(' ', 'T').replace(/Z?$/, 'Z');
+  const dt = new Date(normalized);
+  if (isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString('en-GB', {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function txSign(type) {
@@ -68,17 +78,44 @@ function txSign(type) {
   return { sign: '', cls: '' };
 }
 
+function txIcon(t) {
+  if (t.category_icon) return t.category_icon;
+  if (t.type === 'transfer') return '↔';
+  if (t.type === 'income')   return '💰';
+  if (t.type === 'refund')   return '↩️';
+  return '💸';
+}
+
+function txCategoryName(t) {
+  if (t.category_name) return t.category_name;
+  if (t.type === 'transfer') return 'Transfer';
+  if (t.type === 'income')   return 'Income';
+  if (t.type === 'refund')   return 'Refund';
+  return '—';
+}
+
+function txItemPlace(t) {
+  const parts = [];
+  if (t.item_name) {
+    let name = t.item_name;
+    if (t.item_size) name += ` (${t.item_size})`;
+    parts.push(name);
+  }
+  if (t.place_branch) parts.push(`@ ${t.place_branch}`);
+  return parts.join(' ');
+}
+
 // ---------- Telegram login ----------
 
 function mountTelegramWidget() {
   if (!CONFIG || !CONFIG.bot_username) return;
-  const link = document.getElementById('bot-link');
+  const link = $('bot-link');
   if (link) {
     link.textContent = '@' + CONFIG.bot_username;
     link.href = 'https://t.me/' + CONFIG.bot_username;
   }
-  const container = document.getElementById('telegram-login-widget');
-  container.innerHTML = '';
+  const c = $('telegram-login-widget');
+  c.innerHTML = '';
   const s = document.createElement('script');
   s.async = true;
   s.src = 'https://telegram.org/js/telegram-widget.js?22';
@@ -87,7 +124,7 @@ function mountTelegramWidget() {
   s.setAttribute('data-onauth', 'onTelegramAuth(user)');
   s.setAttribute('data-request-access', 'write');
   s.setAttribute('data-userpic', 'true');
-  container.appendChild(s);
+  c.appendChild(s);
 }
 
 async function onTelegramAuth(user) {
@@ -108,20 +145,49 @@ async function logout() {
   location.reload();
 }
 
+// ---------- Routing ----------
+
+let currentRoute = 'dashboard';
+
+function setRoute(route) {
+  currentRoute = route;
+  document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
+  const page = $(`page-${route}`);
+  const link = document.querySelector(`.nav-link[data-route="${route}"]`);
+  if (page) page.classList.remove('hidden');
+  if (link) link.classList.add('active');
+  refreshCurrent();
+}
+
+function onHashChange() {
+  const route = (location.hash || '#dashboard').replace('#', '').split('?')[0];
+  if (['dashboard', 'transactions'].includes(route)) {
+    setRoute(route);
+  } else {
+    setRoute('dashboard');
+  }
+}
+
+function refreshCurrent() {
+  if (currentRoute === 'dashboard') return loadDashboard();
+  if (currentRoute === 'transactions') return loadTransactions();
+}
+
 // ---------- Dashboard render ----------
 
 function renderHeader(me) {
-  document.getElementById('user-name').textContent = `User ${me.user_id}`;
+  $('user-name').textContent = `User ${me.user_id}`;
 }
 
 function renderNetWorth(cents, walletCount) {
-  document.getElementById('net-worth').textContent = fmtAmount(cents);
+  $('net-worth').textContent = fmtAmount(cents);
   const noun = walletCount === 1 ? 'wallet' : 'wallets';
-  document.getElementById('net-worth-sub').textContent = `across ${walletCount} ${noun}`;
+  $('net-worth-sub').textContent = `across ${walletCount} ${noun}`;
 }
 
 function renderWallets(wallets) {
-  const root = document.getElementById('wallets-list');
+  const root = $('wallets-list');
   if (!wallets || wallets.length === 0) {
     root.innerHTML = '<div class="muted small">No wallets yet. Use the bot.</div>';
     return;
@@ -130,23 +196,17 @@ function renderWallets(wallets) {
     const icon = TYPE_ICONS[w.type] || '•';
     const name = w.name_en || w.name_ar || `Wallet ${w.id}`;
     const balCls = w.balance_cents < 0 ? 'wallet-balance negative' : 'wallet-balance';
-    return `
-      <div class="wallet-row">
-        <div class="wallet-name"><span class="wallet-icon">${icon}</span><span>${escapeHtml(name)}</span></div>
-        <div class="${balCls}">${fmtAmount(w.balance_cents)}</div>
-      </div>`;
+    return `<div class="wallet-row">
+      <div class="wallet-name"><span class="wallet-icon">${icon}</span><span>${escapeHtml(name)}</span></div>
+      <div class="${balCls}">${fmtAmount(w.balance_cents)}</div>
+    </div>`;
   }).join('');
 }
 
 function renderMonthBreakdown(monthData) {
-  const total = monthData.total_cents || 0;
-  const totalEl = document.getElementById('month-total');
-  totalEl.textContent = fmtAmount(total);
-
-  const monthName = new Date().toLocaleString('en-US', { month: 'long' });
-  document.getElementById('month-name').textContent = monthName;
-
-  const root = document.getElementById('month-by-category');
+  $('month-total').textContent = fmtAmount(monthData.total_cents || 0);
+  $('month-name').textContent = new Date().toLocaleString('en-US', { month: 'long' });
+  const root = $('month-by-category');
   const rows = monthData.by_category || [];
   if (rows.length === 0) {
     root.innerHTML = '<div class="muted small">No spending this month yet.</div>';
@@ -155,66 +215,45 @@ function renderMonthBreakdown(monthData) {
   const max = rows[0].total_cents || 1;
   root.innerHTML = rows.slice(0, 8).map(r => {
     const pct = Math.max(2, Math.round((r.total_cents / max) * 100));
-    return `
-      <div class="bar-row">
-        <div class="bar-meta">
-          <span class="bar-cat">${r.category_icon || '•'} ${escapeHtml(r.category_name)}</span>
-          <span class="bar-amt">${fmtAmount(r.total_cents)}</span>
-        </div>
-        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-      </div>`;
+    return `<div class="bar-row">
+      <div class="bar-meta">
+        <span class="bar-cat">${r.category_icon || '•'} ${escapeHtml(r.category_name)}</span>
+        <span class="bar-amt">${fmtAmount(r.total_cents)}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+    </div>`;
   }).join('');
 }
 
 function renderRecent(rows) {
-  const root = document.getElementById('recent-list');
+  const root = $('recent-list');
   if (!rows || rows.length === 0) {
     root.innerHTML = '<div class="muted small">No transactions yet.</div>';
     return;
   }
   root.innerHTML = rows.map(t => {
     const { sign, cls } = txSign(t.type);
-    const cat = t.category_name || (t.type === 'transfer' ? 'Transfer' : '—');
-    const icon = t.category_icon || (t.type === 'transfer' ? '↔' : (t.type === 'income' ? '💰' : '💸'));
-
-    let line2parts = [];
-    if (t.item_name) {
-      let name = t.item_name;
-      if (t.item_size) name += ` (${t.item_size})`;
-      line2parts.push(name);
-    }
-    if (t.place_branch) line2parts.push(`@ ${t.place_branch}`);
-    if (t.type === 'transfer' && t.source_wallet_name && t.dest_wallet_name) {
-      line2parts.push(`${t.source_wallet_name} → ${t.dest_wallet_name}`);
-    }
-    if (t.note) line2parts.push(`<span class="tx-note">${escapeHtml(t.note)}</span>`);
-    line2parts.push(fmtDateRelative(t.occurred_at));
-    const line2 = line2parts.join(' · ');
-
-    return `
-      <div class="tx-row">
-        <div class="tx-icon">${icon}</div>
-        <div class="tx-mid">
-          <div class="tx-line1">${escapeHtml(cat)}</div>
-          <div class="tx-line2">${line2}</div>
-        </div>
-        <div class="tx-amount ${cls}">${sign}${fmtAmount(t.amount_cents).replace('-', '')}</div>
-      </div>`;
+    const cat = txCategoryName(t);
+    const icon = txIcon(t);
+    const itemPlace = txItemPlace(t);
+    const parts = [];
+    if (itemPlace) parts.push(itemPlace);
+    if (t.note) parts.push(`<span class="tx-note">${escapeHtml(t.note)}</span>`);
+    parts.push(fmtDateRelative(t.occurred_at));
+    return `<div class="tx-row">
+      <div class="tx-icon">${icon}</div>
+      <div class="tx-mid">
+        <div class="tx-line1">${escapeHtml(cat)}</div>
+        <div class="tx-line2">${parts.join(' · ')}</div>
+      </div>
+      <div class="tx-amount ${cls}">${sign}${fmtAmount(t.amount_cents).replace('-', '')}</div>
+    </div>`;
   }).join('');
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-// ---------- Loaders ----------
-
 async function loadDashboard() {
-  const btn = document.getElementById('refresh-btn');
-  if (btn) btn.classList.add('spinning');
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
   try {
     const data = await fetchJSON('/api/dashboard');
     renderNetWorth(data.net_worth_cents, (data.wallets || []).length);
@@ -223,28 +262,276 @@ async function loadDashboard() {
     renderRecent(data.recent_transactions);
   } catch (e) {
     if (e.status === 401 || e.status === 403) {
-      show('login-screen');
-      mountTelegramWidget();
-      return;
+      show('login-screen'); mountTelegramWidget(); return;
     }
-    alert('Failed to load: ' + (e.message || 'unknown'));
+    alert('Failed to load dashboard: ' + (e.message || 'unknown'));
   } finally {
-    if (btn) btn.classList.remove('spinning');
+    btn.classList.remove('spinning');
   }
 }
 
-async function init() {
-  try {
-    CONFIG = await fetchJSON('/api/config');
-  } catch (_) {
-    CONFIG = { bot_username: 'Money_trackeer_bot' };
+// ---------- Transactions page ----------
+
+let TX_STATE = {
+  page: 1,
+  page_size: 50,
+};
+
+async function ensureLookups() {
+  if (LOOKUPS) return LOOKUPS;
+  LOOKUPS = await fetchJSON('/api/lookups');
+  populateFilterDropdowns();
+  return LOOKUPS;
+}
+
+function populateFilterDropdowns() {
+  // Wallets
+  const wsel = $('f-wallet');
+  wsel.innerHTML = '<option value="">— Any —</option>' +
+    (LOOKUPS.wallets || []).map(w => {
+      const name = escapeHtml(w.name_en || w.name_ar || `Wallet ${w.id}`);
+      return `<option value="${w.id}">${name}</option>`;
+    }).join('');
+
+  // Categories — parents + indented children
+  const csel = $('f-category');
+  const cats = LOOKUPS.categories || [];
+  const parents = cats.filter(c => c.parent_id == null);
+  const childrenByParent = {};
+  cats.filter(c => c.parent_id != null).forEach(c => {
+    (childrenByParent[c.parent_id] = childrenByParent[c.parent_id] || []).push(c);
+  });
+  let opts = '<option value="">— Any —</option>';
+  for (const p of parents) {
+    const icon = p.icon || '•';
+    opts += `<option value="${p.id}">${icon} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
+    for (const ch of (childrenByParent[p.id] || [])) {
+      const cicon = ch.icon || '·';
+      opts += `<option value="${ch.id}">  ↳ ${cicon} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
+    }
   }
+  csel.innerHTML = opts;
+
+  // Places
+  const psel = $('f-place');
+  psel.innerHTML = '<option value="">— Any —</option>' +
+    (LOOKUPS.places || []).map(p => {
+      let label = p.branch_name || `Place ${p.id}`;
+      if (p.chain_name && p.chain_name !== p.branch_name) label += ` · ${p.chain_name}`;
+      return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+    }).join('');
+
+  // Items
+  const isel = $('f-item');
+  isel.innerHTML = '<option value="">— Any —</option>' +
+    (LOOKUPS.items || []).map(it => {
+      let label = it.canonical_name_en || it.canonical_name_ar || `Item ${it.id}`;
+      if (it.size) label += ` (${it.size})`;
+      return `<option value="${it.id}">${escapeHtml(label)}</option>`;
+    }).join('');
+}
+
+function readFilters() {
+  const f = {
+    date_from:   $('f-date-from').value || '',
+    date_to:     $('f-date-to').value || '',
+    type:        $('f-type').value || '',
+    wallet_id:   $('f-wallet').value || '',
+    category_id: $('f-category').value || '',
+    place_id:    $('f-place').value || '',
+    item_id:     $('f-item').value || '',
+    q:           $('f-q').value.trim(),
+    sort:        $('f-sort').value || 'date_desc',
+    page:        TX_STATE.page,
+    page_size:   parseInt($('f-page-size').value, 10) || 50,
+  };
+  // Date inputs return YYYY-MM-DD; expand to ISO bounds
+  if (f.date_from) f.date_from = `${f.date_from}T00:00:00Z`;
+  if (f.date_to)   f.date_to   = `${f.date_to}T23:59:59Z`;
+  return f;
+}
+
+function buildQuery(filters) {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v !== '' && v != null) params.set(k, v);
+  });
+  return params.toString();
+}
+
+function syncFilterUrl(filters) {
+  const visible = { ...filters };
+  delete visible.page_size;
+  delete visible.page;
+  const q = buildQuery(visible);
+  const newHash = q ? `#transactions?${q}` : '#transactions';
+  if (location.hash !== newHash) {
+    history.replaceState(null, '', newHash);
+  }
+}
+
+function applyFilters() {
+  TX_STATE.page = 1;
+  loadTransactions();
+}
+
+function clearFilters() {
+  ['f-date-from', 'f-date-to', 'f-type', 'f-wallet',
+   'f-category', 'f-place', 'f-item', 'f-q'].forEach(id => {
+    $(id).value = '';
+  });
+  $('f-sort').value = 'date_desc';
+  $('f-page-size').value = '50';
+  TX_STATE.page = 1;
+  loadTransactions();
+}
+
+function gotoPage(p) {
+  TX_STATE.page = Math.max(1, p);
+  loadTransactions();
+}
+
+function renderTxTable(payload) {
+  const wrap = $('tx-table-wrap');
+  $('tx-total').textContent = `${payload.total} transaction${payload.total === 1 ? '' : 's'}`;
+
+  const rows = payload.rows || [];
+  if (rows.length === 0) {
+    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No transactions match these filters.</div>';
+    $('pagination').innerHTML = '';
+    return;
+  }
+
+  const trs = rows.map(t => {
+    const { sign, cls } = txSign(t.type);
+    const icon = txIcon(t);
+    const cat = txCategoryName(t);
+    const itemPlace = txItemPlace(t) || '—';
+    let walletCol = '';
+    if (t.type === 'transfer') {
+      walletCol = `${escapeHtml(t.source_wallet_name || '?')} → ${escapeHtml(t.dest_wallet_name || '?')}`;
+    } else if (t.type === 'spend') {
+      walletCol = escapeHtml(t.source_wallet_name || '?');
+    } else {
+      walletCol = escapeHtml(t.dest_wallet_name || '?');
+    }
+    return `
+      <tr data-id="${t.id}" onclick="toggleTxDetail(${t.id})">
+        <td class="col-date">${fmtDateRelative(t.occurred_at)}</td>
+        <td class="col-cat"><span class="icon">${icon}</span>${escapeHtml(cat)}</td>
+        <td class="hide-mobile">${escapeHtml(itemPlace)}</td>
+        <td class="hide-mobile">${walletCol}</td>
+        <td class="col-amount ${cls}">${sign}${fmtAmount(t.amount_cents).replace('-', '')}</td>
+      </tr>
+      <tr class="detail-row hidden" id="detail-${t.id}">
+        <td colspan="5">
+          <div class="detail-inner">
+            <div class="kv-row"><span>Type</span><span>${t.type}</span></div>
+            <div class="kv-row"><span>Date</span><span>${fmtDateAbsolute(t.occurred_at)}</span></div>
+            ${t.item_name ? `<div class="kv-row"><span>Item</span><span>${escapeHtml(t.item_name)}${t.item_size ? ` (${escapeHtml(t.item_size)})` : ''}</span></div>` : ''}
+            ${t.place_branch ? `<div class="kv-row"><span>Place</span><span>${escapeHtml(t.place_branch)}${t.place_chain && t.place_chain !== t.place_branch ? ` · ${escapeHtml(t.place_chain)}` : ''}</span></div>` : ''}
+            ${t.source_wallet_name ? `<div class="kv-row"><span>From wallet</span><span>${escapeHtml(t.source_wallet_name)}</span></div>` : ''}
+            ${t.dest_wallet_name ? `<div class="kv-row"><span>To wallet</span><span>${escapeHtml(t.dest_wallet_name)}</span></div>` : ''}
+            ${t.note ? `<div class="kv-row"><span>Note</span><span>${escapeHtml(t.note)}</span></div>` : ''}
+            <div class="kv-row"><span>ID</span><span>#${t.id}</span></div>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  wrap.innerHTML = `
+    <table class="tx-table">
+      <thead>
+        <tr>
+          <th class="col-date">Date</th>
+          <th>Category</th>
+          <th class="hide-mobile">Item / Place</th>
+          <th class="hide-mobile">Wallet</th>
+          <th class="col-amount">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${trs}</tbody>
+    </table>
+  `;
+
+  // Pagination
+  const { page, total_pages } = payload;
+  $('pagination').innerHTML = `
+    <button onclick="gotoPage(1)"             ${page <= 1 ? 'disabled' : ''} title="First">«</button>
+    <button onclick="gotoPage(${page - 1})"   ${page <= 1 ? 'disabled' : ''}>‹ Prev</button>
+    <span class="page-info">Page ${page} of ${total_pages}</span>
+    <button onclick="gotoPage(${page + 1})"   ${page >= total_pages ? 'disabled' : ''}>Next ›</button>
+    <button onclick="gotoPage(${total_pages})" ${page >= total_pages ? 'disabled' : ''} title="Last">»</button>
+  `;
+}
+
+function toggleTxDetail(id) {
+  const el = $(`detail-${id}`);
+  if (el) el.classList.toggle('hidden');
+}
+
+async function loadTransactions() {
+  await ensureLookups();
+  applyFiltersFromUrl();
+  const filters = readFilters();
+  syncFilterUrl(filters);
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  $('tx-table-wrap').innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">Loading…</div>';
+  try {
+    const data = await fetchJSON('/api/transactions?' + buildQuery(filters));
+    renderTxTable(data);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) {
+      show('login-screen'); mountTelegramWidget(); return;
+    }
+    $('tx-table-wrap').innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+// On hash with ?params=…, populate filter inputs. Run once per page enter.
+let _appliedHashOnce = false;
+function applyFiltersFromUrl() {
+  if (_appliedHashOnce) return;
+  _appliedHashOnce = true;
+  const hash = location.hash || '';
+  const idx = hash.indexOf('?');
+  if (idx < 0) return;
+  const params = new URLSearchParams(hash.slice(idx + 1));
+  const set = (id, key, transform) => {
+    const v = params.get(key);
+    if (v != null && v !== '') $(id).value = transform ? transform(v) : v;
+  };
+  // Strip ISO bounds back to date inputs
+  set('f-date-from', 'date_from', v => v.slice(0, 10));
+  set('f-date-to',   'date_to',   v => v.slice(0, 10));
+  set('f-type',      'type');
+  set('f-wallet',    'wallet_id');
+  set('f-category',  'category_id');
+  set('f-place',     'place_id');
+  set('f-item',      'item_id');
+  set('f-q',         'q');
+  set('f-sort',      'sort');
+}
+
+// ---------- Init ----------
+
+async function init() {
+  try { CONFIG = await fetchJSON('/api/config'); }
+  catch (_) { CONFIG = { bot_username: 'Money_trackeer_bot' }; }
 
   try {
     ME = await fetchJSON('/api/me');
     renderHeader(ME);
-    show('dashboard');
-    await loadDashboard();
+    show('app');
+    onHashChange();
+    window.addEventListener('hashchange', () => {
+      _appliedHashOnce = false;
+      onHashChange();
+    });
   } catch (e) {
     if (e.status === 401 || e.status === 403) {
       show('login-screen');
@@ -259,5 +546,9 @@ async function init() {
 
 window.onTelegramAuth = onTelegramAuth;
 window.logout = logout;
-window.loadDashboard = loadDashboard;
+window.refreshCurrent = refreshCurrent;
+window.applyFilters = applyFilters;
+window.clearFilters = clearFilters;
+window.gotoPage = gotoPage;
+window.toggleTxDetail = toggleTxDetail;
 window.addEventListener('DOMContentLoaded', init);

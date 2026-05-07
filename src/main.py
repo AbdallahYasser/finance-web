@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from src import auth, config, db
 from src.queries import wallets as q_wallets
 from src.queries import transactions as q_tx
+from src.queries import lookups as q_lookups
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -87,6 +88,41 @@ async def me(user_id: int = Depends(auth.get_current_user)):
         "timezone": user.get("timezone") or "Africa/Cairo",
         "salary_day": user.get("salary_day"),
         "created_at": user.get("created_at") or "",
+    }
+
+
+@app.get("/api/transactions")
+async def transactions_search(
+    user_id: int = Depends(auth.get_current_user),
+    date_from: str | None = None,
+    date_to:   str | None = None,
+    category_id: int | None = None,
+    place_id:    int | None = None,
+    item_id:     int | None = None,
+    wallet_id:   int | None = None,
+    type:        str | None = None,
+    q:           str | None = None,
+    sort:        str = "date_desc",
+    page:        int = 1,
+    page_size:   int = 50,
+):
+    return await q_tx.search(
+        date_from=date_from, date_to=date_to,
+        category_id=category_id, place_id=place_id,
+        item_id=item_id, wallet_id=wallet_id,
+        tx_type=type, q=q, sort=sort,
+        page=page, page_size=page_size,
+    )
+
+
+@app.get("/api/lookups")
+async def lookups(user_id: int = Depends(auth.get_current_user)):
+    """Filter dropdown data — wallets, categories, places, items."""
+    return {
+        "wallets":    await q_lookups.wallets_list(),
+        "categories": await q_lookups.categories_tree(),
+        "places":     await q_lookups.places_list(),
+        "items":      await q_lookups.items_list(),
     }
 
 

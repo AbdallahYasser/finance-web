@@ -22,62 +22,137 @@
   </div>
 </div>
 
-<!-- Dashboard -->
-<div id="dashboard" class="screen hidden">
+<!-- App shell -->
+<div id="app" class="screen hidden">
   <header>
     <div class="header-left">
       <span class="header-icon">💰</span>
       <span class="header-title">Finance Tracker</span>
+      <nav class="header-nav">
+        <a href="#dashboard"    class="nav-link" data-route="dashboard">Dashboard</a>
+        <a href="#transactions" class="nav-link" data-route="transactions">Transactions</a>
+      </nav>
     </div>
     <div class="header-right">
-      <button id="refresh-btn" onclick="loadDashboard()" title="Refresh">🔄</button>
+      <button id="refresh-btn" onclick="refreshCurrent()" title="Refresh">🔄</button>
       <div class="user-info"><span id="user-name"></span></div>
       <button id="logout-btn" onclick="logout()">Logout</button>
     </div>
   </header>
 
-  <main class="content">
+  <!-- ========= Dashboard page ========= -->
+  <main id="page-dashboard" class="content page hidden">
 
-    <!-- Net worth -->
     <section class="card net-worth-card">
       <div class="net-worth-label">Net worth</div>
       <div class="net-worth-value" id="net-worth">—</div>
       <div class="net-worth-sub muted small" id="net-worth-sub">—</div>
     </section>
 
-    <!-- Wallets + Month side-by-side on desktop, stacked on mobile -->
     <div class="grid-two">
       <section class="card">
         <h3>Wallets</h3>
-        <div id="wallets-list" class="kv-list">
-          <div class="muted small">Loading…</div>
-        </div>
+        <div id="wallets-list" class="kv-list"><div class="muted small">Loading…</div></div>
       </section>
 
       <section class="card">
         <h3>This month <span id="month-name" class="muted small"></span></h3>
         <div class="month-total" id="month-total">—</div>
-        <div id="month-by-category" class="bars">
-          <div class="muted small">Loading…</div>
-        </div>
+        <div id="month-by-category" class="bars"><div class="muted small">Loading…</div></div>
       </section>
     </div>
 
-    <!-- Recent transactions -->
     <section class="card">
       <h3>Recent transactions</h3>
-      <div id="recent-list" class="tx-list">
-        <div class="muted small">Loading…</div>
-      </div>
+      <div id="recent-list" class="tx-list"><div class="muted small">Loading…</div></div>
       <p class="muted small" style="margin-top:12px;">
-        Showing the last 20. Full filterable table comes in W2.
+        <a href="#transactions">See all transactions →</a>
       </p>
     </section>
+  </main>
 
+  <!-- ========= Transactions page ========= -->
+  <main id="page-transactions" class="content page hidden">
+
+    <section class="card filter-bar">
+      <h3>Filters <span class="muted small" id="filter-count">—</span></h3>
+      <div class="filter-grid">
+        <div class="filter-field">
+          <label for="f-date-from">From</label>
+          <input type="date" id="f-date-from" />
+        </div>
+        <div class="filter-field">
+          <label for="f-date-to">To</label>
+          <input type="date" id="f-date-to" />
+        </div>
+        <div class="filter-field">
+          <label for="f-type">Type</label>
+          <select id="f-type">
+            <option value="">— Any —</option>
+            <option value="spend">Spend</option>
+            <option value="income">Income</option>
+            <option value="transfer">Transfer</option>
+            <option value="refund">Refund</option>
+          </select>
+        </div>
+        <div class="filter-field">
+          <label for="f-wallet">Wallet</label>
+          <select id="f-wallet"><option value="">— Any —</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-category">Category</label>
+          <select id="f-category"><option value="">— Any —</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-place">Place</label>
+          <select id="f-place"><option value="">— Any —</option></select>
+        </div>
+        <div class="filter-field">
+          <label for="f-item">Item</label>
+          <select id="f-item"><option value="">— Any —</option></select>
+        </div>
+        <div class="filter-field filter-field-wide">
+          <label for="f-q">Search</label>
+          <input type="text" id="f-q" placeholder="note / item / place…" />
+        </div>
+        <div class="filter-field">
+          <label for="f-sort">Sort</label>
+          <select id="f-sort">
+            <option value="date_desc">Newest first</option>
+            <option value="date_asc">Oldest first</option>
+            <option value="amount_desc">Largest amount</option>
+            <option value="amount_asc">Smallest amount</option>
+          </select>
+        </div>
+      </div>
+      <div class="filter-actions">
+        <button class="btn-primary" onclick="applyFilters()">Apply</button>
+        <button onclick="clearFilters()">Clear</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="tx-table-meta">
+        <span id="tx-total" class="muted small">—</span>
+        <span class="muted small">
+          Page size:
+          <select id="f-page-size" onchange="applyFilters()">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </span>
+      </div>
+
+      <div id="tx-table-wrap"><div class="muted small">Loading…</div></div>
+
+      <div class="pagination" id="pagination"></div>
+    </section>
   </main>
 
   <footer class="muted small">
-    finance-web · W1 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
+    finance-web · W2 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
     · use <a href="https://t.me/Money_trackeer_bot" target="_blank">the bot</a> to add transactions
   </footer>
 </div>
