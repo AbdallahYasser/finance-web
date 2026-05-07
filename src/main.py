@@ -18,6 +18,8 @@ from src import auth, config, db
 from src.queries import wallets as q_wallets
 from src.queries import transactions as q_tx
 from src.queries import lookups as q_lookups
+from src.queries import items as q_items
+from src.queries import places as q_places
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -124,6 +126,32 @@ async def lookups(user_id: int = Depends(auth.get_current_user)):
         "places":     await q_lookups.places_list(),
         "items":      await q_lookups.items_list(),
     }
+
+
+@app.get("/api/items")
+async def items_list(user_id: int = Depends(auth.get_current_user)):
+    return {"items": await q_items.list_summary()}
+
+
+@app.get("/api/items/{item_id}")
+async def item_detail(item_id: int, user_id: int = Depends(auth.get_current_user)):
+    detail = await q_items.get_detail(item_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return detail
+
+
+@app.get("/api/places")
+async def places_list(user_id: int = Depends(auth.get_current_user)):
+    return {"places": await q_places.list_summary()}
+
+
+@app.get("/api/places/{place_id}")
+async def place_detail(place_id: int, user_id: int = Depends(auth.get_current_user)):
+    detail = await q_places.get_detail(place_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Place not found")
+    return detail
 
 
 @app.get("/api/dashboard")

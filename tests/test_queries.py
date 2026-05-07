@@ -487,3 +487,194 @@ async def test_lookups_places_and_items(search_db):
     assert places[0]["branch_name"] == "7-Eleven Maadi"
     assert len(items) == 1
     assert items[0]["canonical_name_en"] == "Water bottle"
+
+
+# ---------- Items detail (W3) ----------
+
+@pytest_asyncio.fixture
+async def w3_db(finance_db):
+    """Seed items + places + item_prices to exercise W3 queries."""
+    # Need item_prices table — also schema
+    async with aiosqlite.connect(finance_db) as db:
+        await db.execute("""
+            CREATE TABLE item_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL,
+                place_id INTEGER NOT NULL,
+                price_cents INTEGER NOT NULL,
+                observed_at TEXT NOT NULL,
+                on_sale INTEGER DEFAULT 0,
+                transaction_id INTEGER,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.commit()
+
+    await _seed(finance_db,
+        wallets=[
+            {"name": "Cash", "type": "cash", "initial": 50000},
+        ],
+        categories=[
+            {"name": "Food", "icon": "🍴"},
+        ],
+    )
+    async with aiosqlite.connect(finance_db) as db:
+        # 2 places
+        await db.execute(
+            "INSERT INTO places (branch_name, chain_name) VALUES (?, ?)",
+            ("7-Eleven Maadi", "7-Eleven"),
+        )
+        await db.execute(
+            "INSERT INTO places (branch_name, chain_name) VALUES (?, ?)",
+            ("Carrefour Maadi", "Carrefour"),
+        )
+        # 2 items: water (id=1) and snacks (id=2)
+        await db.execute(
+            "INSERT INTO items (canonical_name_en, size, default_category_id) VALUES (?, ?, ?)",
+            ("Water bottle", "500ml", 1),
+        )
+        await db.execute(
+            "INSERT INTO items (canonical_name_en) VALUES (?)",
+            ("Chips",),
+        )
+        # Transactions (item-tagged)
+        await db.execute(
+            """INSERT INTO transactions
+               (type, amount_cents, source_wallet_id, category_id, item_id, place_id, occurred_at, source)
+               VALUES ('spend', 500, 1, 1, 1, 1, '2026-04-10T10:00:00Z', 'manual')"""
+        )
+        await db.execute(
+            """INSERT INTO transactions
+               (type, amount_cents, source_wallet_id, category_id, item_id, place_id, occurred_at, source)
+               VALUES ('spend', 600, 1, 1, 1, 1, '2026-05-01T10:00:00Z', 'manual')"""
+        )
+        await db.execute(
+            """INSERT INTO transactions
+               (type, amount_cents, source_wallet_id, category_id, item_id, place_id, occurred_at, source)
+               VALUES ('spend', 550, 1, 1, 1, 2, '2026-04-20T10:00:00Z', 'manual')"""
+        )
+        await db.execute(
+            """INSERT INTO transactions
+               (type, amount_cents, source_wallet_id, category_id, item_id, place_id, occurred_at, source)
+               VALUES ('spend', 1500, 1, 1, 2, 1, '2026-04-15T10:00:00Z', 'manual')"""
+        )
+        # Item prices matching the spends
+        for (item_id, place_id, cents, at, tx_id) in [
+            (1, 1, 500, "2026-04-10T10:00:00Z", 1),
+            (1, 1, 600, "2026-05-01T10:00:00Z", 2),
+            (1, 2, 550, "2026-04-20T10:00:00Z", 3),
+            (2, 1, 1500, "2026-04-15T10:00:00Z", 4),
+        ]:
+            await db.execute(
+                """INSERT INTO item_prices (item_id, place_id, price_cents, observed_at, transaction_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (item_id, place_id, cents, at, tx_id),
+            )
+        await db.commit()
+    return finance_db
+
+
+@pytest.mark.asyncio
+async def test_items_summary_basic(w3_db):
+    from src.queries import items as q
+    rows = await q.list_summary()
+    assert len(rows) == 2
+    by_name = {r["name_en"]: r for r in rows}
+    # Water: 3 transactions (500+600+550 = 1650), 2 places, last @ 2026-05-01 = 600
+    water = by_name["Water bottle"]
+    assert water["tx_count"] == 3
+    assert water["total_spent_cents"] == 1650
+    assert water["place_count"] == 2
+    assert water["last_price_cents"] == 600
+    # Chips: 1 tx, 1 place, last_price 1500
+    chips = by_name["Chips"]
+    assert chips["tx_count"] == 1
+    assert chips["last_price_cents"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_items_summary_excludes_deleted(w3_db):
+    from src.queries import items as q
+    async with aiosqlite.connect(w3_db) as db:
+        await db.execute("UPDATE items SET deleted_at = datetime('now') WHERE id = 2")
+        await db.commit()
+    rows = await q.list_summary()
+    assert len(rows) == 1
+    assert rows[0]["name_en"] == "Water bottle"
+
+
+@pytest.mark.asyncio
+async def test_item_detail_groups_by_place(w3_db):
+    from src.queries import items as q
+    detail = await q.get_detail(1)
+    assert detail is not None
+    assert detail["item"]["name_en"] == "Water bottle"
+    assert detail["summary"]["place_count"] == 2
+    assert detail["summary"]["overall_min_cents"] == 500
+    assert detail["summary"]["overall_max_cents"] == 600
+    assert detail["summary"]["tx_count"] == 3
+
+    # Each place should have its observations
+    by_place = {p["place_id"]: p for p in detail["places"]}
+    p1 = by_place[1]
+    assert p1["branch_name"] == "7-Eleven Maadi"
+    assert p1["observation_count"] == 2
+    assert p1["min_cents"] == 500
+    assert p1["max_cents"] == 600
+    assert p1["last_cents"] == 600  # 600 is more recent than 500
+
+    p2 = by_place[2]
+    assert p2["branch_name"] == "Carrefour Maadi"
+    assert p2["observation_count"] == 1
+    assert p2["last_cents"] == 550
+
+
+@pytest.mark.asyncio
+async def test_item_detail_missing_returns_none(w3_db):
+    from src.queries import items as q
+    assert await q.get_detail(99999) is None
+
+
+# ---------- Places detail (W3) ----------
+
+@pytest.mark.asyncio
+async def test_places_summary(w3_db):
+    from src.queries import places as q
+    rows = await q.list_summary()
+    assert len(rows) == 2
+    by_branch = {r["branch_name"]: r for r in rows}
+    # 7-Eleven Maadi: 3 spends (500+600+1500 = 2600), 2 distinct items
+    se = by_branch["7-Eleven Maadi"]
+    assert se["tx_count"] == 3
+    assert se["total_spent_cents"] == 2600
+    assert se["item_count"] == 2
+    # Carrefour Maadi: 1 spend (550), 1 item
+    cf = by_branch["Carrefour Maadi"]
+    assert cf["tx_count"] == 1
+    assert cf["total_spent_cents"] == 550
+    assert cf["item_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_place_detail_top_items_and_recent(w3_db):
+    from src.queries import places as q
+    detail = await q.get_detail(1)
+    assert detail is not None
+    assert detail["place"]["branch_name"] == "7-Eleven Maadi"
+    # Top items at place 1: Chips (1500) > Water (500+600 = 1100)
+    assert len(detail["top_items"]) == 2
+    assert detail["top_items"][0]["name_en"] == "Chips"
+    assert detail["top_items"][0]["total_spent_cents"] == 1500
+    assert detail["top_items"][1]["name_en"] == "Water bottle"
+    assert detail["top_items"][1]["total_spent_cents"] == 1100
+    assert detail["top_items"][1]["tx_count"] == 2
+    # Recent ordered newest first
+    assert detail["recent"][0]["amount_cents"] == 600  # 2026-05-01
+    assert detail["summary"]["tx_count"] == 3
+    assert detail["summary"]["total_spent_cents"] == 2600
+
+
+@pytest.mark.asyncio
+async def test_place_detail_missing_returns_none(w3_db):
+    from src.queries import places as q
+    assert await q.get_detail(99999) is None

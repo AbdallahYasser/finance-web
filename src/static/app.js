@@ -1,4 +1,4 @@
-// finance-web W2 — login + dashboard + transactions table.
+// finance-web W3 — login + dashboard + transactions + items + places.
 
 let CONFIG = null;
 let ME = null;
@@ -8,7 +8,13 @@ const TYPE_ICONS = {
   cash: '💵', bank: '🏦', e_wallet: '📱', asset_gold: '🥇',
 };
 
-// ---------- Generic helpers ----------
+// One palette for chart lines per place
+const CHART_PALETTE = [
+  '#38bdf8', '#22c55e', '#f59e0b', '#ef4444',
+  '#a78bfa', '#ec4899', '#14b8a6', '#84cc16',
+];
+
+// ---------- Helpers ----------
 
 function $(id) { return document.getElementById(id); }
 function show(id) {
@@ -105,6 +111,20 @@ function txItemPlace(t) {
   return parts.join(' ');
 }
 
+function placeLabel(p) {
+  if (!p) return '—';
+  let label = p.branch_name || `Place ${p.place_id || p.id}`;
+  if (p.chain_name && p.chain_name !== p.branch_name) label += ` · ${p.chain_name}`;
+  return label;
+}
+
+function itemLabel(i) {
+  if (!i) return '—';
+  let label = i.name_en || i.canonical_name_en || i.name_ar || i.canonical_name_ar || `Item ${i.id}`;
+  if (i.size) label += ` (${i.size})`;
+  return label;
+}
+
 // ---------- Telegram login ----------
 
 function mountTelegramWidget() {
@@ -148,6 +168,7 @@ async function logout() {
 // ---------- Routing ----------
 
 let currentRoute = 'dashboard';
+const ROUTES = ['dashboard', 'transactions', 'items', 'places'];
 
 function setRoute(route) {
   currentRoute = route;
@@ -162,19 +183,17 @@ function setRoute(route) {
 
 function onHashChange() {
   const route = (location.hash || '#dashboard').replace('#', '').split('?')[0];
-  if (['dashboard', 'transactions'].includes(route)) {
-    setRoute(route);
-  } else {
-    setRoute('dashboard');
-  }
+  setRoute(ROUTES.includes(route) ? route : 'dashboard');
 }
 
 function refreshCurrent() {
-  if (currentRoute === 'dashboard') return loadDashboard();
+  if (currentRoute === 'dashboard')    return loadDashboard();
   if (currentRoute === 'transactions') return loadTransactions();
+  if (currentRoute === 'items')        return loadItems();
+  if (currentRoute === 'places')       return loadPlaces();
 }
 
-// ---------- Dashboard render ----------
+// ---------- Dashboard ----------
 
 function renderHeader(me) {
   $('user-name').textContent = `User ${me.user_id}`;
@@ -261,21 +280,16 @@ async function loadDashboard() {
     renderMonthBreakdown(data.this_month || { total_cents: 0, by_category: [] });
     renderRecent(data.recent_transactions);
   } catch (e) {
-    if (e.status === 401 || e.status === 403) {
-      show('login-screen'); mountTelegramWidget(); return;
-    }
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
     alert('Failed to load dashboard: ' + (e.message || 'unknown'));
   } finally {
     btn.classList.remove('spinning');
   }
 }
 
-// ---------- Transactions page ----------
+// ---------- Transactions ----------
 
-let TX_STATE = {
-  page: 1,
-  page_size: 50,
-};
+let TX_STATE = { page: 1, page_size: 50 };
 
 async function ensureLookups() {
   if (LOOKUPS) return LOOKUPS;
@@ -285,15 +299,10 @@ async function ensureLookups() {
 }
 
 function populateFilterDropdowns() {
-  // Wallets
   const wsel = $('f-wallet');
   wsel.innerHTML = '<option value="">— Any —</option>' +
-    (LOOKUPS.wallets || []).map(w => {
-      const name = escapeHtml(w.name_en || w.name_ar || `Wallet ${w.id}`);
-      return `<option value="${w.id}">${name}</option>`;
-    }).join('');
+    (LOOKUPS.wallets || []).map(w => `<option value="${w.id}">${escapeHtml(w.name_en || w.name_ar || `Wallet ${w.id}`)}</option>`).join('');
 
-  // Categories — parents + indented children
   const csel = $('f-category');
   const cats = LOOKUPS.categories || [];
   const parents = cats.filter(c => c.parent_id == null);
@@ -303,16 +312,13 @@ function populateFilterDropdowns() {
   });
   let opts = '<option value="">— Any —</option>';
   for (const p of parents) {
-    const icon = p.icon || '•';
-    opts += `<option value="${p.id}">${icon} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
+    opts += `<option value="${p.id}">${p.icon || '•'} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
     for (const ch of (childrenByParent[p.id] || [])) {
-      const cicon = ch.icon || '·';
-      opts += `<option value="${ch.id}">  ↳ ${cicon} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
+      opts += `<option value="${ch.id}">  ↳ ${ch.icon || '·'} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
     }
   }
   csel.innerHTML = opts;
 
-  // Places
   const psel = $('f-place');
   psel.innerHTML = '<option value="">— Any —</option>' +
     (LOOKUPS.places || []).map(p => {
@@ -321,7 +327,6 @@ function populateFilterDropdowns() {
       return `<option value="${p.id}">${escapeHtml(label)}</option>`;
     }).join('');
 
-  // Items
   const isel = $('f-item');
   isel.innerHTML = '<option value="">— Any —</option>' +
     (LOOKUPS.items || []).map(it => {
@@ -345,7 +350,6 @@ function readFilters() {
     page:        TX_STATE.page,
     page_size:   parseInt($('f-page-size').value, 10) || 50,
   };
-  // Date inputs return YYYY-MM-DD; expand to ISO bounds
   if (f.date_from) f.date_from = `${f.date_from}T00:00:00Z`;
   if (f.date_to)   f.date_to   = `${f.date_to}T23:59:59Z`;
   return f;
@@ -370,26 +374,18 @@ function syncFilterUrl(filters) {
   }
 }
 
-function applyFilters() {
-  TX_STATE.page = 1;
-  loadTransactions();
-}
+function applyFilters() { TX_STATE.page = 1; loadTransactions(); }
 
 function clearFilters() {
   ['f-date-from', 'f-date-to', 'f-type', 'f-wallet',
-   'f-category', 'f-place', 'f-item', 'f-q'].forEach(id => {
-    $(id).value = '';
-  });
+   'f-category', 'f-place', 'f-item', 'f-q'].forEach(id => { $(id).value = ''; });
   $('f-sort').value = 'date_desc';
   $('f-page-size').value = '50';
   TX_STATE.page = 1;
   loadTransactions();
 }
 
-function gotoPage(p) {
-  TX_STATE.page = Math.max(1, p);
-  loadTransactions();
-}
+function gotoPage(p) { TX_STATE.page = Math.max(1, p); loadTransactions(); }
 
 function renderTxTable(payload) {
   const wrap = $('tx-table-wrap');
@@ -455,7 +451,6 @@ function renderTxTable(payload) {
     </table>
   `;
 
-  // Pagination
   const { page, total_pages } = payload;
   $('pagination').innerHTML = `
     <button onclick="gotoPage(1)"             ${page <= 1 ? 'disabled' : ''} title="First">«</button>
@@ -466,9 +461,29 @@ function renderTxTable(payload) {
   `;
 }
 
-function toggleTxDetail(id) {
-  const el = $(`detail-${id}`);
-  if (el) el.classList.toggle('hidden');
+function toggleTxDetail(id) { $(`detail-${id}`)?.classList.toggle('hidden'); }
+
+let _appliedHashOnce = false;
+function applyFiltersFromUrl() {
+  if (_appliedHashOnce) return;
+  _appliedHashOnce = true;
+  const hash = location.hash || '';
+  const idx = hash.indexOf('?');
+  if (idx < 0) return;
+  const params = new URLSearchParams(hash.slice(idx + 1));
+  const set = (id, key, transform) => {
+    const v = params.get(key);
+    if (v != null && v !== '') $(id).value = transform ? transform(v) : v;
+  };
+  set('f-date-from', 'date_from', v => v.slice(0, 10));
+  set('f-date-to',   'date_to',   v => v.slice(0, 10));
+  set('f-type',      'type');
+  set('f-wallet',    'wallet_id');
+  set('f-category',  'category_id');
+  set('f-place',     'place_id');
+  set('f-item',      'item_id');
+  set('f-q',         'q');
+  set('f-sort',      'sort');
 }
 
 async function loadTransactions() {
@@ -483,38 +498,409 @@ async function loadTransactions() {
     const data = await fetchJSON('/api/transactions?' + buildQuery(filters));
     renderTxTable(data);
   } catch (e) {
-    if (e.status === 401 || e.status === 403) {
-      show('login-screen'); mountTelegramWidget(); return;
-    }
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
     $('tx-table-wrap').innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
   } finally {
     btn.classList.remove('spinning');
   }
 }
 
-// On hash with ?params=…, populate filter inputs. Run once per page enter.
-let _appliedHashOnce = false;
-function applyFiltersFromUrl() {
-  if (_appliedHashOnce) return;
-  _appliedHashOnce = true;
-  const hash = location.hash || '';
-  const idx = hash.indexOf('?');
-  if (idx < 0) return;
-  const params = new URLSearchParams(hash.slice(idx + 1));
-  const set = (id, key, transform) => {
-    const v = params.get(key);
-    if (v != null && v !== '') $(id).value = transform ? transform(v) : v;
+// ---------- Items ----------
+
+const _itemCharts = new Map();
+
+async function loadItems() {
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  $('items-table-wrap').innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">Loading…</div>';
+  try {
+    const data = await fetchJSON('/api/items');
+    renderItemsTable(data.items || []);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
+    $('items-table-wrap').innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function renderItemsTable(items) {
+  $('items-meta').textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
+  const wrap = $('items-table-wrap');
+  if (items.length === 0) {
+    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No items yet. Add some via the bot.</div>';
+    return;
+  }
+  const trs = items.map(it => `
+    <tr data-id="${it.id}" onclick="toggleItemDetail(${it.id})">
+      <td>${escapeHtml(itemLabel(it))}</td>
+      <td class="hide-mobile">${it.tx_count || 0}</td>
+      <td class="hide-mobile">${it.place_count || 0}</td>
+      <td class="col-amount">${fmtAmount(it.last_price_cents)}</td>
+      <td class="col-amount">${fmtAmount(it.total_spent_cents)}</td>
+      <td class="hide-mobile col-date">${it.last_observed_at ? fmtDateRelative(it.last_observed_at) : '—'}</td>
+    </tr>
+    <tr class="detail-row hidden" id="item-detail-${it.id}">
+      <td colspan="6"><div id="item-detail-body-${it.id}" class="detail-inner-block">
+        <div class="muted small">Loading…</div>
+      </div></td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <table class="tx-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th class="hide-mobile">Bought</th>
+          <th class="hide-mobile">Places</th>
+          <th class="col-amount">Last price</th>
+          <th class="col-amount">Total spent</th>
+          <th class="hide-mobile col-date">Last seen</th>
+        </tr>
+      </thead>
+      <tbody>${trs}</tbody>
+    </table>
+  `;
+}
+
+async function toggleItemDetail(id) {
+  const row = $(`item-detail-${id}`);
+  if (!row) return;
+  const wasHidden = row.classList.contains('hidden');
+  row.classList.toggle('hidden');
+  if (wasHidden) {
+    await populateItemDetail(id);
+  }
+}
+
+async function populateItemDetail(id) {
+  const body = $(`item-detail-body-${id}`);
+  body.innerHTML = '<div class="muted small">Loading…</div>';
+  let data;
+  try {
+    data = await fetchJSON(`/api/items/${id}`);
+  } catch (e) {
+    body.innerHTML = `<div class="muted small">Failed to load: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { item, places, summary } = data;
+
+  const summaryHtml = `
+    <div class="entity-summary">
+      <div class="kv-tile"><span>Total spent</span><strong>${fmtAmount(summary.total_spent_cents)}</strong></div>
+      <div class="kv-tile"><span>Transactions</span><strong>${summary.tx_count}</strong></div>
+      <div class="kv-tile"><span>Places</span><strong>${summary.place_count}</strong></div>
+      <div class="kv-tile"><span>Min</span><strong>${fmtAmount(summary.overall_min_cents)}</strong></div>
+      <div class="kv-tile"><span>Avg</span><strong>${fmtAmount(summary.overall_avg_cents)}</strong></div>
+      <div class="kv-tile"><span>Max</span><strong>${fmtAmount(summary.overall_max_cents)}</strong></div>
+    </div>
+  `;
+
+  const placesHtml = places.length === 0 ? '' : `
+    <h4 class="detail-section-title">Per-place price history</h4>
+    <table class="tx-table compact">
+      <thead>
+        <tr>
+          <th>Place</th>
+          <th>Observations</th>
+          <th class="col-amount">Min</th>
+          <th class="col-amount">Last</th>
+          <th class="col-amount">Max</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${places.map(p => `
+          <tr>
+            <td>${escapeHtml(placeLabel(p))}</td>
+            <td>${p.observation_count}</td>
+            <td class="col-amount">${fmtAmount(p.min_cents)}</td>
+            <td class="col-amount">${fmtAmount(p.last_cents)}</td>
+            <td class="col-amount">${fmtAmount(p.max_cents)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  const chartHtml = places.length > 0 ? `
+    <h4 class="detail-section-title">Price chart</h4>
+    <div class="chart-wrap"><canvas id="item-chart-${id}"></canvas></div>
+  ` : '<div class="muted small" style="margin-top:12px;">No price observations yet. Buy this item again from the bot to start the history.</div>';
+
+  body.innerHTML = summaryHtml + chartHtml + placesHtml;
+
+  if (places.length > 0) {
+    drawItemChart(id, places);
+  }
+}
+
+function drawItemChart(id, places) {
+  const canvas = $(`item-chart-${id}`);
+  if (!canvas) return;
+  if (_itemCharts.has(id)) {
+    _itemCharts.get(id).destroy();
+    _itemCharts.delete(id);
+  }
+  if (typeof Chart === 'undefined') {
+    canvas.parentElement.innerHTML = '<div class="muted small">Chart library unavailable.</div>';
+    return;
+  }
+
+  const datasets = places.map((p, i) => {
+    const color = CHART_PALETTE[i % CHART_PALETTE.length];
+    return {
+      label: placeLabel(p),
+      data: p.observations.map(o => ({
+        x: o.observed_at,
+        y: o.price_cents / 100,  // EGP for display
+      })),
+      borderColor: color,
+      backgroundColor: color,
+      pointRadius: 4,
+      tension: 0.2,
+      spanGaps: true,
+    };
+  });
+
+  const chart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'yyyy-LL-dd HH:mm', unit: 'day' },
+          ticks: { color: '#94a3b8' },
+          grid: { color: '#334155' },
+        },
+        y: {
+          ticks: {
+            color: '#94a3b8',
+            callback: v => v.toLocaleString('en-US') + ' EGP',
+          },
+          grid: { color: '#334155' },
+          beginAtZero: false,
+        },
+      },
+      plugins: {
+        legend: { labels: { color: '#e2e8f0' } },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP`,
+          },
+        },
+      },
+    },
+  });
+
+  _itemCharts.set(id, chart);
+}
+
+// Chart.js v4 needs a date adapter for time scales — bring in luxon adapter on demand.
+// We avoid the adapter dependency by formatting x as a date string and using 'category' scale instead.
+// Override above to use category if time adapter unavailable:
+(function patchChartTimeFallback() {
+  // Detect if time adapter is missing and switch scale type lazily
+  const orig = drawItemChart;
+  window.drawItemChart = function(id, places) {
+    const canvas = $(`item-chart-${id}`);
+    if (!canvas) return;
+    if (_itemCharts.has(id)) { _itemCharts.get(id).destroy(); _itemCharts.delete(id); }
+    if (typeof Chart === 'undefined') {
+      canvas.parentElement.innerHTML = '<div class="muted small">Chart library unavailable.</div>';
+      return;
+    }
+    // Build labels (sorted union of all observation timestamps) for category-x chart
+    const allDates = new Set();
+    places.forEach(p => p.observations.forEach(o => allDates.add(o.observed_at)));
+    const labels = Array.from(allDates).sort();
+    const labelDisplay = labels.map(d => fmtDateAbsolute(d).replace(/, \d{2}:\d{2}$/, ''));
+
+    const datasets = places.map((p, i) => {
+      const color = CHART_PALETTE[i % CHART_PALETTE.length];
+      const map = new Map(p.observations.map(o => [o.observed_at, o.price_cents / 100]));
+      return {
+        label: placeLabel(p),
+        data: labels.map(d => map.has(d) ? map.get(d) : null),
+        borderColor: color,
+        backgroundColor: color,
+        pointRadius: 4,
+        tension: 0.2,
+        spanGaps: true,
+      };
+    });
+
+    const chart = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels: labelDisplay, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+          y: {
+            ticks: {
+              color: '#94a3b8',
+              callback: v => v.toLocaleString('en-US') + ' EGP',
+            },
+            grid: { color: '#334155' },
+            beginAtZero: false,
+          },
+        },
+        plugins: {
+          legend: { labels: { color: '#e2e8f0' } },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP`,
+            },
+          },
+        },
+      },
+    });
+    _itemCharts.set(id, chart);
   };
-  // Strip ISO bounds back to date inputs
-  set('f-date-from', 'date_from', v => v.slice(0, 10));
-  set('f-date-to',   'date_to',   v => v.slice(0, 10));
-  set('f-type',      'type');
-  set('f-wallet',    'wallet_id');
-  set('f-category',  'category_id');
-  set('f-place',     'place_id');
-  set('f-item',      'item_id');
-  set('f-q',         'q');
-  set('f-sort',      'sort');
+})();
+
+// ---------- Places ----------
+
+async function loadPlaces() {
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  $('places-table-wrap').innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">Loading…</div>';
+  try {
+    const data = await fetchJSON('/api/places');
+    renderPlacesTable(data.places || []);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
+    $('places-table-wrap').innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function renderPlacesTable(places) {
+  $('places-meta').textContent = `${places.length} place${places.length === 1 ? '' : 's'}`;
+  const wrap = $('places-table-wrap');
+  if (places.length === 0) {
+    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No places yet. Add some via the bot.</div>';
+    return;
+  }
+  const trs = places.map(p => `
+    <tr data-id="${p.id}" onclick="togglePlaceDetail(${p.id})">
+      <td>${escapeHtml(placeLabel(p))}</td>
+      <td class="hide-mobile">${p.tx_count || 0}</td>
+      <td class="hide-mobile">${p.item_count || 0}</td>
+      <td class="col-amount">${fmtAmount(p.total_spent_cents)}</td>
+      <td class="hide-mobile col-date">${p.last_used ? fmtDateRelative(p.last_used) : '—'}</td>
+    </tr>
+    <tr class="detail-row hidden" id="place-detail-${p.id}">
+      <td colspan="5"><div id="place-detail-body-${p.id}" class="detail-inner-block">
+        <div class="muted small">Loading…</div>
+      </div></td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <table class="tx-table">
+      <thead>
+        <tr>
+          <th>Place</th>
+          <th class="hide-mobile">Transactions</th>
+          <th class="hide-mobile">Items</th>
+          <th class="col-amount">Total spent</th>
+          <th class="hide-mobile col-date">Last visit</th>
+        </tr>
+      </thead>
+      <tbody>${trs}</tbody>
+    </table>
+  `;
+}
+
+async function togglePlaceDetail(id) {
+  const row = $(`place-detail-${id}`);
+  if (!row) return;
+  const wasHidden = row.classList.contains('hidden');
+  row.classList.toggle('hidden');
+  if (wasHidden) {
+    await populatePlaceDetail(id);
+  }
+}
+
+async function populatePlaceDetail(id) {
+  const body = $(`place-detail-body-${id}`);
+  body.innerHTML = '<div class="muted small">Loading…</div>';
+  let data;
+  try {
+    data = await fetchJSON(`/api/places/${id}`);
+  } catch (e) {
+    body.innerHTML = `<div class="muted small">Failed to load: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const { summary, top_items, recent } = data;
+
+  const summaryHtml = `
+    <div class="entity-summary">
+      <div class="kv-tile"><span>Total spent</span><strong>${fmtAmount(summary.total_spent_cents)}</strong></div>
+      <div class="kv-tile"><span>Transactions</span><strong>${summary.tx_count}</strong></div>
+      <div class="kv-tile"><span>First visit</span><strong>${summary.first_used ? fmtDateRelative(summary.first_used) : '—'}</strong></div>
+      <div class="kv-tile"><span>Last visit</span><strong>${summary.last_used ? fmtDateRelative(summary.last_used) : '—'}</strong></div>
+    </div>
+  `;
+
+  const topItemsHtml = top_items.length === 0 ? '' : `
+    <h4 class="detail-section-title">Top items bought here</h4>
+    <table class="tx-table compact">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th class="hide-mobile">Times bought</th>
+          <th class="col-amount">Last price</th>
+          <th class="col-amount">Total spent</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${top_items.map(it => `
+          <tr>
+            <td>${escapeHtml(itemLabel(it))}</td>
+            <td class="hide-mobile">${it.tx_count}</td>
+            <td class="col-amount">${fmtAmount(it.last_price_cents)}</td>
+            <td class="col-amount">${fmtAmount(it.total_spent_cents)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  const recentHtml = recent.length === 0 ? '' : `
+    <h4 class="detail-section-title">Recent transactions</h4>
+    <div class="tx-list">
+      ${recent.map(t => {
+        const { sign, cls } = txSign(t.type);
+        const cat = txCategoryName(t);
+        const icon = txIcon(t);
+        const parts = [];
+        if (t.item_name) {
+          let n = t.item_name; if (t.item_size) n += ` (${t.item_size})`; parts.push(n);
+        }
+        if (t.note) parts.push(`<span class="tx-note">${escapeHtml(t.note)}</span>`);
+        parts.push(fmtDateRelative(t.occurred_at));
+        return `<div class="tx-row">
+          <div class="tx-icon">${icon}</div>
+          <div class="tx-mid">
+            <div class="tx-line1">${escapeHtml(cat)}</div>
+            <div class="tx-line2">${parts.join(' · ')}</div>
+          </div>
+          <div class="tx-amount ${cls}">${sign}${fmtAmount(t.amount_cents).replace('-', '')}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  body.innerHTML = summaryHtml + topItemsHtml + recentHtml;
 }
 
 // ---------- Init ----------
@@ -534,12 +920,10 @@ async function init() {
     });
   } catch (e) {
     if (e.status === 401 || e.status === 403) {
-      show('login-screen');
-      mountTelegramWidget();
+      show('login-screen'); mountTelegramWidget();
     } else {
       alert('Error loading: ' + (e.message || 'unknown'));
-      show('login-screen');
-      mountTelegramWidget();
+      show('login-screen'); mountTelegramWidget();
     }
   }
 }
@@ -551,4 +935,6 @@ window.applyFilters = applyFilters;
 window.clearFilters = clearFilters;
 window.gotoPage = gotoPage;
 window.toggleTxDetail = toggleTxDetail;
+window.toggleItemDetail = toggleItemDetail;
+window.togglePlaceDetail = togglePlaceDetail;
 window.addEventListener('DOMContentLoaded', init);

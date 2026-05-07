@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Finance Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -31,6 +32,8 @@
       <nav class="header-nav">
         <a href="#dashboard"    class="nav-link" data-route="dashboard">Dashboard</a>
         <a href="#transactions" class="nav-link" data-route="transactions">Transactions</a>
+        <a href="#items"        class="nav-link" data-route="items">Items</a>
+        <a href="#places"       class="nav-link" data-route="places">Places</a>
       </nav>
     </div>
     <div class="header-right">
@@ -40,28 +43,24 @@
     </div>
   </header>
 
-  <!-- ========= Dashboard page ========= -->
+  <!-- ========= Dashboard ========= -->
   <main id="page-dashboard" class="content page hidden">
-
     <section class="card net-worth-card">
       <div class="net-worth-label">Net worth</div>
       <div class="net-worth-value" id="net-worth">—</div>
       <div class="net-worth-sub muted small" id="net-worth-sub">—</div>
     </section>
-
     <div class="grid-two">
       <section class="card">
         <h3>Wallets</h3>
         <div id="wallets-list" class="kv-list"><div class="muted small">Loading…</div></div>
       </section>
-
       <section class="card">
         <h3>This month <span id="month-name" class="muted small"></span></h3>
         <div class="month-total" id="month-total">—</div>
         <div id="month-by-category" class="bars"><div class="muted small">Loading…</div></div>
       </section>
     </div>
-
     <section class="card">
       <h3>Recent transactions</h3>
       <div id="recent-list" class="tx-list"><div class="muted small">Loading…</div></div>
@@ -71,22 +70,14 @@
     </section>
   </main>
 
-  <!-- ========= Transactions page ========= -->
+  <!-- ========= Transactions ========= -->
   <main id="page-transactions" class="content page hidden">
-
     <section class="card filter-bar">
       <h3>Filters <span class="muted small" id="filter-count">—</span></h3>
       <div class="filter-grid">
-        <div class="filter-field">
-          <label for="f-date-from">From</label>
-          <input type="date" id="f-date-from" />
-        </div>
-        <div class="filter-field">
-          <label for="f-date-to">To</label>
-          <input type="date" id="f-date-to" />
-        </div>
-        <div class="filter-field">
-          <label for="f-type">Type</label>
+        <div class="filter-field"><label for="f-date-from">From</label><input type="date" id="f-date-from" /></div>
+        <div class="filter-field"><label for="f-date-to">To</label><input type="date" id="f-date-to" /></div>
+        <div class="filter-field"><label for="f-type">Type</label>
           <select id="f-type">
             <option value="">— Any —</option>
             <option value="spend">Spend</option>
@@ -95,28 +86,12 @@
             <option value="refund">Refund</option>
           </select>
         </div>
-        <div class="filter-field">
-          <label for="f-wallet">Wallet</label>
-          <select id="f-wallet"><option value="">— Any —</option></select>
-        </div>
-        <div class="filter-field">
-          <label for="f-category">Category</label>
-          <select id="f-category"><option value="">— Any —</option></select>
-        </div>
-        <div class="filter-field">
-          <label for="f-place">Place</label>
-          <select id="f-place"><option value="">— Any —</option></select>
-        </div>
-        <div class="filter-field">
-          <label for="f-item">Item</label>
-          <select id="f-item"><option value="">— Any —</option></select>
-        </div>
-        <div class="filter-field filter-field-wide">
-          <label for="f-q">Search</label>
-          <input type="text" id="f-q" placeholder="note / item / place…" />
-        </div>
-        <div class="filter-field">
-          <label for="f-sort">Sort</label>
+        <div class="filter-field"><label for="f-wallet">Wallet</label><select id="f-wallet"><option value="">— Any —</option></select></div>
+        <div class="filter-field"><label for="f-category">Category</label><select id="f-category"><option value="">— Any —</option></select></div>
+        <div class="filter-field"><label for="f-place">Place</label><select id="f-place"><option value="">— Any —</option></select></div>
+        <div class="filter-field"><label for="f-item">Item</label><select id="f-item"><option value="">— Any —</option></select></div>
+        <div class="filter-field filter-field-wide"><label for="f-q">Search</label><input type="text" id="f-q" placeholder="note / item / place…" /></div>
+        <div class="filter-field"><label for="f-sort">Sort</label>
           <select id="f-sort">
             <option value="date_desc">Newest first</option>
             <option value="date_asc">Oldest first</option>
@@ -130,7 +105,6 @@
         <button onclick="clearFilters()">Clear</button>
       </div>
     </section>
-
     <section class="card">
       <div class="tx-table-meta">
         <span id="tx-total" class="muted small">—</span>
@@ -144,15 +118,41 @@
           </select>
         </span>
       </div>
-
       <div id="tx-table-wrap"><div class="muted small">Loading…</div></div>
-
       <div class="pagination" id="pagination"></div>
     </section>
   </main>
 
+  <!-- ========= Items ========= -->
+  <main id="page-items" class="content page hidden">
+    <section class="card">
+      <h3>
+        <span>Items</span>
+        <span class="muted small" id="items-meta">—</span>
+      </h3>
+      <p class="muted small" style="margin-bottom:16px;">
+        Click any row to expand the price history across places.
+      </p>
+      <div id="items-table-wrap"><div class="muted small">Loading…</div></div>
+    </section>
+  </main>
+
+  <!-- ========= Places ========= -->
+  <main id="page-places" class="content page hidden">
+    <section class="card">
+      <h3>
+        <span>Places</span>
+        <span class="muted small" id="places-meta">—</span>
+      </h3>
+      <p class="muted small" style="margin-bottom:16px;">
+        Click any row to see top items bought there + recent transactions.
+      </p>
+      <div id="places-table-wrap"><div class="muted small">Loading…</div></div>
+    </section>
+  </main>
+
   <footer class="muted small">
-    finance-web · W2 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
+    finance-web · W3 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
     · use <a href="https://t.me/Money_trackeer_bot" target="_blank">the bot</a> to add transactions
   </footer>
 </div>
