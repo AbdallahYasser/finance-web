@@ -37,6 +37,7 @@
       </nav>
     </div>
     <div class="header-right">
+      <button id="add-tx-btn" class="btn-primary" onclick="openTxForm()" title="Add transaction">+ Add</button>
       <button id="refresh-btn" onclick="refreshCurrent()" title="Refresh">🔄</button>
       <div class="user-info"><span id="user-name"></span></div>
       <button id="logout-btn" onclick="logout()">Logout</button>
@@ -108,15 +109,21 @@
     <section class="card">
       <div class="tx-table-meta">
         <span id="tx-total" class="muted small">—</span>
-        <span class="muted small">
-          Page size:
-          <select id="f-page-size" onchange="applyFilters()">
-            <option value="25">25</option>
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-          </select>
-        </span>
+        <div class="meta-right">
+          <label class="checkbox-label muted small">
+            <input type="checkbox" id="f-show-deleted" onchange="applyFilters()" />
+            Show deleted
+          </label>
+          <span class="muted small">
+            Page size:
+            <select id="f-page-size" onchange="applyFilters()">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </span>
+        </div>
       </div>
       <div id="tx-table-wrap"><div class="muted small">Loading…</div></div>
       <div class="pagination" id="pagination"></div>
@@ -152,10 +159,141 @@
   </main>
 
   <footer class="muted small">
-    finance-web · W3 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
-    · use <a href="https://t.me/Money_trackeer_bot" target="_blank">the bot</a> to add transactions
+    finance-web · W4 · <a href="https://github.com/AbdallahYasser/finance-web" target="_blank">source</a>
   </footer>
 </div>
+
+<!-- ========= Transaction modal ========= -->
+<div id="tx-modal" class="modal-overlay hidden" onclick="onTxModalBgClick(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="tx-modal-title">New transaction</h2>
+      <button class="modal-close" onclick="closeTxForm()" title="Close">✕</button>
+    </div>
+
+    <form id="tx-form" onsubmit="event.preventDefault(); saveTxForm();" class="tx-form">
+      <input type="hidden" id="tx-id" />
+      <input type="hidden" id="tx-refund-of" />
+
+      <div class="form-row">
+        <label>Type</label>
+        <div class="radio-row">
+          <label class="radio"><input type="radio" name="tx-type" value="spend" checked onchange="onTypeChange()"> 💸 Spend</label>
+          <label class="radio"><input type="radio" name="tx-type" value="income" onchange="onTypeChange()"> 💰 Income</label>
+          <label class="radio"><input type="radio" name="tx-type" value="transfer" onchange="onTypeChange()"> ↔ Transfer</label>
+        </div>
+      </div>
+
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="tx-amount">Amount (EGP)</label>
+          <input type="text" id="tx-amount" inputmode="decimal" placeholder="e.g. 250 or 250.50" autocomplete="off" />
+          <div class="field-error" id="tx-amount-error"></div>
+        </div>
+        <div class="form-field">
+          <label for="tx-date">Date</label>
+          <input type="date" id="tx-date" />
+        </div>
+      </div>
+
+      <div class="form-row form-row-split">
+        <div class="form-field" id="tx-from-wallet-field">
+          <label for="tx-from-wallet">From wallet</label>
+          <select id="tx-from-wallet"></select>
+        </div>
+        <div class="form-field" id="tx-to-wallet-field">
+          <label for="tx-to-wallet">To wallet</label>
+          <select id="tx-to-wallet"></select>
+        </div>
+      </div>
+
+      <div class="form-row" id="tx-category-field">
+        <label for="tx-category">Category</label>
+        <select id="tx-category"></select>
+      </div>
+
+      <div class="form-row form-row-split" id="tx-place-item-fields">
+        <div class="form-field">
+          <label for="tx-place">Place (optional)</label>
+          <select id="tx-place" onchange="onPlaceChange()"></select>
+        </div>
+        <div class="form-field">
+          <label for="tx-item">Item (optional)</label>
+          <select id="tx-item" onchange="onItemChange()"></select>
+        </div>
+      </div>
+
+      <!-- Inline create-place panel (toggled when "+ New place" picked) -->
+      <div id="tx-new-place-panel" class="inline-create hidden">
+        <div class="form-row form-row-split">
+          <div class="form-field">
+            <label for="tx-new-place-branch">New place — branch</label>
+            <input type="text" id="tx-new-place-branch" placeholder="e.g. 7-Eleven Maadi" maxlength="80" />
+          </div>
+          <div class="form-field">
+            <label for="tx-new-place-chain">Chain (optional)</label>
+            <input type="text" id="tx-new-place-chain" placeholder="e.g. 7-Eleven" maxlength="80" />
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button type="button" onclick="createInlinePlace()" class="btn-primary">Create place</button>
+          <button type="button" onclick="cancelInlinePlace()">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Inline create-item panel -->
+      <div id="tx-new-item-panel" class="inline-create hidden">
+        <div class="form-row form-row-split">
+          <div class="form-field">
+            <label for="tx-new-item-name">New item — name</label>
+            <input type="text" id="tx-new-item-name" placeholder="e.g. Water bottle" maxlength="80" />
+          </div>
+          <div class="form-field">
+            <label for="tx-new-item-size">Size (optional)</label>
+            <input type="text" id="tx-new-item-size" placeholder="e.g. 500ml" maxlength="30" />
+          </div>
+        </div>
+        <div class="form-row form-row-split">
+          <div class="form-field">
+            <label for="tx-new-item-unit">Unit (optional)</label>
+            <input type="text" id="tx-new-item-unit" placeholder="e.g. bottle" maxlength="30" />
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button type="button" onclick="createInlineItem()" class="btn-primary">Create item</button>
+          <button type="button" onclick="cancelInlineItem()">Cancel</button>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="tx-note">Note (optional)</label>
+        <textarea id="tx-note" rows="2" placeholder="e.g. lunch with…"></textarea>
+      </div>
+
+      <div class="form-error" id="tx-form-error"></div>
+
+      <div class="modal-actions">
+        <button type="button" onclick="closeTxForm()">Cancel</button>
+        <button type="submit" class="btn-primary" id="tx-form-save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Confirm modal ========= -->
+<div id="confirm-modal" class="modal-overlay hidden" onclick="closeConfirm()">
+  <div class="modal-box modal-small" onclick="event.stopPropagation()">
+    <h3 id="confirm-title">Confirm</h3>
+    <p id="confirm-message" class="muted"></p>
+    <div class="modal-actions">
+      <button onclick="closeConfirm()">Cancel</button>
+      <button class="btn-danger" id="confirm-ok-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========= Toast container ========= -->
+<div id="toasts" class="toasts"></div>
 
 <script src="./app.js"></script>
 </body>

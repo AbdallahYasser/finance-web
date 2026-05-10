@@ -1,8 +1,9 @@
-"""Read-only aiosqlite access to finance-bot's database.
+"""aiosqlite access to finance-bot's database.
 
-The `?immutable=1` URI flag lets us open a WAL-mode DB on a read-only
-bind mount without needing the `.db-shm` file (which can't be created
-on a read-only filesystem).
+`db_uri()` returns a read-only URI with `?immutable=1` — used for all query
+helpers. `write_db_uri()` returns a plain file: URI for write paths.
+The bind mount is now read-write (W4); WAL mode (set by the bot) handles
+both processes writing concurrently.
 """
 import aiosqlite
 
@@ -10,7 +11,13 @@ from src import config
 
 
 def db_uri() -> str:
+    """Read-only URI — used by query modules."""
     return f"file:{config.DB_PATH}?immutable=1"
+
+
+def write_db_uri() -> str:
+    """Read-write URI — used only by `src.writes.*`."""
+    return f"file:{config.DB_PATH}"
 
 
 async def get_user(user_id: int) -> dict | None:

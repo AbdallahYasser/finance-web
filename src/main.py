@@ -10,16 +10,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src import auth, config, db
+from src.middleware import rate_limit
 from src.queries import wallets as q_wallets
 from src.queries import transactions as q_tx
 from src.queries import lookups as q_lookups
 from src.queries import items as q_items
 from src.queries import places as q_places
+from src.writes import transactions as w_tx
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -107,6 +109,7 @@ async def transactions_search(
     sort:        str = "date_desc",
     page:        int = 1,
     page_size:   int = 50,
+    include_deleted: bool = False,
 ):
     return await q_tx.search(
         date_from=date_from, date_to=date_to,
@@ -114,7 +117,84 @@ async def transactions_search(
         item_id=item_id, wallet_id=wallet_id,
         tx_type=type, q=q, sort=sort,
         page=page, page_size=page_size,
+        include_deleted=include_deleted,
     )
+
+
+# ---------- Writes (W4) ----------
+
+@app.post("/api/transactions", status_code=201)
+async def transactions_create(
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        tx_id = await w_tx.insert_transaction(
+            type=body.get("type"),
+            amount_cents=int(body.get("amount_cents", 0)),
+            source_wallet_id=body.get("source_wallet_id"),
+            dest_wallet_id=body.get("dest_wallet_id"),
+            category_id=body.get("category_id"),
+            item_id=body.get("item_id"),
+            place_id=body.get("place_id"),
+            refund_of_id=body.get("refund_of_id"),
+            occurred_at=body.get("occurred_at"),
+            note=body.get("note"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": tx_id, "row": await q_tx.get(tx_id)}
+
+
+@app.put("/api/transactions/{tx_id}")
+async def transactions_update(
+    tx_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    # Filter to known fields, drop None / empty
+    fields = {}
+    for k in ("type", "amount_cents", "source_wallet_id", "dest_wallet_id",
+              "category_id", "item_id", "place_id", "refund_of_id",
+              "occurred_at", "note"):
+        if k in body:
+            fields[k] = body[k]
+    try:
+        ok = await w_tx.update_transaction(tx_id, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    row = await q_tx.get(tx_id)
+    return {"id": tx_id, "row": row}
+
+
+@app.delete("/api/transactions/{tx_id}", status_code=204)
+async def transactions_delete(
+    tx_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_tx.soft_delete(tx_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Transaction not found or already deleted")
+    return Response(status_code=204)
+
+
+@app.post("/api/transactions/{tx_id}/restore")
+async def transactions_restore(
+    tx_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_tx.restore(tx_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Transaction not found or not deleted")
+    return {"id": tx_id, "row": await q_tx.get(tx_id)}
 
 
 @app.get("/api/lookups")

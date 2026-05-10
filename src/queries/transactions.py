@@ -6,6 +6,40 @@ import aiosqlite
 from src.db import db_uri
 
 
+async def get(tx_id: int) -> dict | None:
+    """Fetch a single transaction with all joined fields.
+
+    Used by the write endpoints to return the freshly-saved row.
+    Includes soft-deleted rows so /restore can return the resurrected row.
+    """
+    async with aiosqlite.connect(db_uri(), uri=True) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT
+                t.id, t.type, t.amount_cents, t.occurred_at, t.note,
+                t.source_wallet_id, t.dest_wallet_id, t.category_id,
+                t.item_id, t.place_id, t.refund_of_id,
+                t.deleted_at,
+                c.name_en  AS category_name,  c.icon AS category_icon,
+                i.canonical_name_en AS item_name, i.size AS item_size,
+                p.branch_name AS place_branch, p.chain_name AS place_chain,
+                sw.name_en AS source_wallet_name,
+                dw.name_en AS dest_wallet_name
+            FROM transactions t
+            LEFT JOIN categories c  ON c.id  = t.category_id
+            LEFT JOIN items     i  ON i.id  = t.item_id
+            LEFT JOIN places    p  ON p.id  = t.place_id
+            LEFT JOIN wallets   sw ON sw.id = t.source_wallet_id
+            LEFT JOIN wallets   dw ON dw.id = t.dest_wallet_id
+            WHERE t.id = ?
+            """,
+            (tx_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
 async def recent(limit: int = 20) -> list[dict]:
     """Latest non-deleted transactions with category, item, place joined."""
     async with aiosqlite.connect(db_uri(), uri=True) as db:
@@ -114,6 +148,7 @@ async def search(
     sort: str = "date_desc",
     page: int = 1,
     page_size: int = 50,
+    include_deleted: bool = False,
 ) -> dict:
     """Filterable, sortable, paginated transaction search.
 
@@ -123,8 +158,10 @@ async def search(
     `wallet_id` matches transactions where the wallet is source OR destination.
     `q` LIKEs against note + canonical item names + place branch/chain names.
     """
-    where = ["t.deleted_at IS NULL"]
+    where = []
     params: list = []
+    if not include_deleted:
+        where.append("t.deleted_at IS NULL")
 
     if date_from:
         where.append("t.occurred_at >= ?")
@@ -165,7 +202,7 @@ async def search(
     page = max(1, int(page))
     offset = (page - 1) * page_size
 
-    where_sql = " AND ".join(where)
+    where_sql = " AND ".join(where) if where else "1=1"
 
     count_sql = f"""
         SELECT COUNT(*)
@@ -179,7 +216,8 @@ async def search(
         SELECT
             t.id, t.type, t.amount_cents, t.occurred_at, t.note,
             t.source_wallet_id, t.dest_wallet_id, t.category_id,
-            t.item_id, t.place_id,
+            t.item_id, t.place_id, t.refund_of_id,
+            t.deleted_at,
             c.name_en  AS category_name,  c.icon AS category_icon,
             i.canonical_name_en AS item_name, i.size AS item_size,
             p.branch_name AS place_branch, p.chain_name AS place_chain,

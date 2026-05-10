@@ -1,4 +1,4 @@
-// finance-web W3 — login + dashboard + transactions + items + places.
+// finance-web W4 — login + dashboard + transactions (CRUD) + items + places.
 
 let CONFIG = null;
 let ME = null;
@@ -8,13 +8,12 @@ const TYPE_ICONS = {
   cash: '💵', bank: '🏦', e_wallet: '📱', asset_gold: '🥇',
 };
 
-// One palette for chart lines per place
 const CHART_PALETTE = [
   '#38bdf8', '#22c55e', '#f59e0b', '#ef4444',
   '#a78bfa', '#ec4899', '#14b8a6', '#84cc16',
 ];
 
-// ---------- Helpers ----------
+// ---------- Generic helpers ----------
 
 function $(id) { return document.getElementById(id); }
 function show(id) {
@@ -24,12 +23,15 @@ function show(id) {
 
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
+  let body = null;
+  try { body = await res.json(); } catch (_) {}
   if (!res.ok) {
-    const err = new Error(`HTTP ${res.status}`);
+    const err = new Error((body && body.detail) || `HTTP ${res.status}`);
     err.status = res.status;
+    err.body = body;
     throw err;
   }
-  return res.json();
+  return body;
 }
 
 function escapeHtml(s) {
@@ -125,6 +127,65 @@ function itemLabel(i) {
   return label;
 }
 
+// ---------- Toasts ----------
+
+function toast(message, type = 'info') {
+  const root = $('toasts');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<button class="toast-close">×</button>${escapeHtml(message)}`;
+  el.querySelector('.toast-close').onclick = () => el.remove();
+  root.appendChild(el);
+  setTimeout(() => el.remove(), 4500);
+}
+
+// ---------- Tolerant amount parser (mirror of bot's parse_amount) ----------
+
+const AR_DIGITS = /[٠-٩۰-۹]/g;
+const AR_DIGIT_MAP = { '٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9',
+                       '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9' };
+const CURRENCY_SUFFIX = /\s*(EGP|LE|pounds?|جنيه|ج\.م|ج)\s*$/i;
+const SPACE_THOU = /^\d{1,3}( \d{3})+(\.\d+)?$/;
+const PATTERNS = [
+  [/^\d+$/, 'int'],
+  [/^\d+\.\d+$/, 'dot'],
+  [/^\d+,\d{1,2}$/, 'comma'],
+  [/^\d{1,3}(,\d{3})+(\.\d+)?$/, 'thou'],
+];
+
+function parseAmountToCents(text) {
+  if (text == null) throw new Error('empty amount');
+  let s = text.normalize('NFKC').trim();
+  s = s.replace('٫', '.').replace('٬', '').replace('،', ',');
+  s = s.replace(AR_DIGITS, ch => AR_DIGIT_MAP[ch] || ch);
+  if (s.startsWith('+')) s = s.slice(1).trimStart();
+  s = s.replace(CURRENCY_SUFFIX, '').trim();
+  if (SPACE_THOU.test(s)) s = s.replace(/ /g, '');
+  if (!s) throw new Error('empty amount');
+
+  for (const [re, kind] of PATTERNS) {
+    if (!re.test(s)) continue;
+    if (kind === 'int') return parseInt(s, 10) * 100;
+    if (kind === 'dot') {
+      const [whole, frac] = s.split('.');
+      return parseInt(whole, 10) * 100 + parseInt(frac.slice(0, 2).padEnd(2, '0'), 10);
+    }
+    if (kind === 'comma') {
+      const [whole, frac] = s.split(',');
+      return parseInt(whole, 10) * 100 + parseInt(frac.slice(0, 2).padEnd(2, '0'), 10);
+    }
+    if (kind === 'thou') {
+      const s2 = s.replace(/,/g, '');
+      if (s2.includes('.')) {
+        const [whole, frac] = s2.split('.');
+        return parseInt(whole, 10) * 100 + parseInt(frac.slice(0, 2).padEnd(2, '0'), 10);
+      }
+      return parseInt(s2, 10) * 100;
+    }
+  }
+  throw new Error(`could not parse amount: ${text}`);
+}
+
 // ---------- Telegram login ----------
 
 function mountTelegramWidget() {
@@ -195,9 +256,7 @@ function refreshCurrent() {
 
 // ---------- Dashboard ----------
 
-function renderHeader(me) {
-  $('user-name').textContent = `User ${me.user_id}`;
-}
+function renderHeader(me) { $('user-name').textContent = `User ${me.user_id}`; }
 
 function renderNetWorth(cents, walletCount) {
   $('net-worth').textContent = fmtAmount(cents);
@@ -281,7 +340,7 @@ async function loadDashboard() {
     renderRecent(data.recent_transactions);
   } catch (e) {
     if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
-    alert('Failed to load dashboard: ' + (e.message || 'unknown'));
+    toast('Failed to load dashboard: ' + (e.message || 'unknown'), 'error');
   } finally {
     btn.classList.remove('spinning');
   }
@@ -291,8 +350,8 @@ async function loadDashboard() {
 
 let TX_STATE = { page: 1, page_size: 50 };
 
-async function ensureLookups() {
-  if (LOOKUPS) return LOOKUPS;
+async function ensureLookups(force = false) {
+  if (LOOKUPS && !force) return LOOKUPS;
   LOOKUPS = await fetchJSON('/api/lookups');
   populateFilterDropdowns();
   return LOOKUPS;
@@ -304,20 +363,7 @@ function populateFilterDropdowns() {
     (LOOKUPS.wallets || []).map(w => `<option value="${w.id}">${escapeHtml(w.name_en || w.name_ar || `Wallet ${w.id}`)}</option>`).join('');
 
   const csel = $('f-category');
-  const cats = LOOKUPS.categories || [];
-  const parents = cats.filter(c => c.parent_id == null);
-  const childrenByParent = {};
-  cats.filter(c => c.parent_id != null).forEach(c => {
-    (childrenByParent[c.parent_id] = childrenByParent[c.parent_id] || []).push(c);
-  });
-  let opts = '<option value="">— Any —</option>';
-  for (const p of parents) {
-    opts += `<option value="${p.id}">${p.icon || '•'} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
-    for (const ch of (childrenByParent[p.id] || [])) {
-      opts += `<option value="${ch.id}">  ↳ ${ch.icon || '·'} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
-    }
-  }
-  csel.innerHTML = opts;
+  csel.innerHTML = renderCategoryOptions('— Any —');
 
   const psel = $('f-place');
   psel.innerHTML = '<option value="">— Any —</option>' +
@@ -336,6 +382,23 @@ function populateFilterDropdowns() {
     }).join('');
 }
 
+function renderCategoryOptions(emptyLabel) {
+  const cats = (LOOKUPS && LOOKUPS.categories) || [];
+  const parents = cats.filter(c => c.parent_id == null);
+  const childrenByParent = {};
+  cats.filter(c => c.parent_id != null).forEach(c => {
+    (childrenByParent[c.parent_id] = childrenByParent[c.parent_id] || []).push(c);
+  });
+  let opts = `<option value="">${escapeHtml(emptyLabel)}</option>`;
+  for (const p of parents) {
+    opts += `<option value="${p.id}">${p.icon || '•'} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
+    for (const ch of (childrenByParent[p.id] || [])) {
+      opts += `<option value="${ch.id}">  ↳ ${ch.icon || '·'} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
+    }
+  }
+  return opts;
+}
+
 function readFilters() {
   const f = {
     date_from:   $('f-date-from').value || '',
@@ -349,6 +412,7 @@ function readFilters() {
     sort:        $('f-sort').value || 'date_desc',
     page:        TX_STATE.page,
     page_size:   parseInt($('f-page-size').value, 10) || 50,
+    include_deleted: $('f-show-deleted').checked ? 'true' : '',
   };
   if (f.date_from) f.date_from = `${f.date_from}T00:00:00Z`;
   if (f.date_to)   f.date_to   = `${f.date_to}T23:59:59Z`;
@@ -365,13 +429,10 @@ function buildQuery(filters) {
 
 function syncFilterUrl(filters) {
   const visible = { ...filters };
-  delete visible.page_size;
-  delete visible.page;
+  delete visible.page_size; delete visible.page;
   const q = buildQuery(visible);
   const newHash = q ? `#transactions?${q}` : '#transactions';
-  if (location.hash !== newHash) {
-    history.replaceState(null, '', newHash);
-  }
+  if (location.hash !== newHash) history.replaceState(null, '', newHash);
 }
 
 function applyFilters() { TX_STATE.page = 1; loadTransactions(); }
@@ -381,6 +442,7 @@ function clearFilters() {
    'f-category', 'f-place', 'f-item', 'f-q'].forEach(id => { $(id).value = ''; });
   $('f-sort').value = 'date_desc';
   $('f-page-size').value = '50';
+  $('f-show-deleted').checked = false;
   TX_STATE.page = 1;
   loadTransactions();
 }
@@ -403,6 +465,7 @@ function renderTxTable(payload) {
     const icon = txIcon(t);
     const cat = txCategoryName(t);
     const itemPlace = txItemPlace(t) || '—';
+    const isDeleted = !!t.deleted_at;
     let walletCol = '';
     if (t.type === 'transfer') {
       walletCol = `${escapeHtml(t.source_wallet_name || '?')} → ${escapeHtml(t.dest_wallet_name || '?')}`;
@@ -411,8 +474,17 @@ function renderTxTable(payload) {
     } else {
       walletCol = escapeHtml(t.dest_wallet_name || '?');
     }
+
+    const restoreBtn = isDeleted
+      ? `<button class="btn-primary" onclick="event.stopPropagation(); restoreTx(${t.id})">♻ Restore</button>`
+      : '';
+    const editDeleteBtns = isDeleted ? '' : `
+      <button onclick="event.stopPropagation(); openTxForm(${t.id})">✏️ Edit</button>
+      <button class="btn-danger" onclick="event.stopPropagation(); confirmDeleteTx(${t.id})">🗑 Delete</button>
+    `;
+
     return `
-      <tr data-id="${t.id}" onclick="toggleTxDetail(${t.id})">
+      <tr data-id="${t.id}" class="${isDeleted ? 'tx-row-deleted-row' : ''}" onclick="toggleTxDetail(${t.id})">
         <td class="col-date">${fmtDateRelative(t.occurred_at)}</td>
         <td class="col-cat"><span class="icon">${icon}</span>${escapeHtml(cat)}</td>
         <td class="hide-mobile">${escapeHtml(itemPlace)}</td>
@@ -422,7 +494,7 @@ function renderTxTable(payload) {
       <tr class="detail-row hidden" id="detail-${t.id}">
         <td colspan="5">
           <div class="detail-inner">
-            <div class="kv-row"><span>Type</span><span>${t.type}</span></div>
+            <div class="kv-row"><span>Type</span><span>${t.type}${isDeleted ? ' (deleted)' : ''}</span></div>
             <div class="kv-row"><span>Date</span><span>${fmtDateAbsolute(t.occurred_at)}</span></div>
             ${t.item_name ? `<div class="kv-row"><span>Item</span><span>${escapeHtml(t.item_name)}${t.item_size ? ` (${escapeHtml(t.item_size)})` : ''}</span></div>` : ''}
             ${t.place_branch ? `<div class="kv-row"><span>Place</span><span>${escapeHtml(t.place_branch)}${t.place_chain && t.place_chain !== t.place_branch ? ` · ${escapeHtml(t.place_chain)}` : ''}</span></div>` : ''}
@@ -431,6 +503,7 @@ function renderTxTable(payload) {
             ${t.note ? `<div class="kv-row"><span>Note</span><span>${escapeHtml(t.note)}</span></div>` : ''}
             <div class="kv-row"><span>ID</span><span>#${t.id}</span></div>
           </div>
+          <div class="detail-actions">${restoreBtn}${editDeleteBtns}</div>
         </td>
       </tr>
     `;
@@ -505,7 +578,345 @@ async function loadTransactions() {
   }
 }
 
-// ---------- Items ----------
+// ---------- Transaction form (W4) ----------
+
+let TX_FORM_MODE = 'create'; // 'create' | 'edit'
+let TX_FORM_EDITING = null;  // tx row when editing
+
+async function openTxForm(txId = null) {
+  await ensureLookups();
+  populateTxFormDropdowns();
+
+  if (txId == null) {
+    TX_FORM_MODE = 'create';
+    TX_FORM_EDITING = null;
+    $('tx-modal-title').textContent = 'New transaction';
+    $('tx-id').value = '';
+    $('tx-refund-of').value = '';
+    document.querySelector('input[name="tx-type"][value="spend"]').checked = true;
+    $('tx-amount').value = '';
+    $('tx-date').value = new Date().toISOString().slice(0, 10);
+    $('tx-from-wallet').value = '';
+    $('tx-to-wallet').value = '';
+    $('tx-category').value = '';
+    $('tx-place').value = '';
+    $('tx-item').value = '';
+    $('tx-note').value = '';
+  } else {
+    TX_FORM_MODE = 'edit';
+    let tx;
+    try {
+      const filters = readFilters();
+      filters.include_deleted = 'true';
+      const data = await fetchJSON('/api/transactions?' + buildQuery(filters));
+      tx = (data.rows || []).find(r => r.id === txId);
+      if (!tx) throw new Error('Transaction not found');
+    } catch (e) {
+      toast('Could not load transaction: ' + (e.message || ''), 'error');
+      return;
+    }
+    TX_FORM_EDITING = tx;
+    $('tx-modal-title').textContent = `Edit transaction #${txId}`;
+    $('tx-id').value = txId;
+    $('tx-refund-of').value = tx.refund_of_id || '';
+    const radio = document.querySelector(`input[name="tx-type"][value="${tx.type}"]`);
+    if (radio) radio.checked = true;
+    else document.querySelector('input[name="tx-type"][value="spend"]').checked = true;
+    $('tx-amount').value = (tx.amount_cents / 100).toFixed(2);
+    $('tx-date').value = (tx.occurred_at || '').slice(0, 10);
+    $('tx-from-wallet').value = tx.source_wallet_id || '';
+    $('tx-to-wallet').value = tx.dest_wallet_id || '';
+    $('tx-category').value = tx.category_id || '';
+    $('tx-place').value = tx.place_id || '';
+    $('tx-item').value = tx.item_id || '';
+    $('tx-note').value = tx.note || '';
+  }
+
+  $('tx-amount-error').textContent = '';
+  $('tx-form-error').textContent = '';
+  cancelInlinePlace();
+  cancelInlineItem();
+  onTypeChange();
+  $('tx-modal').classList.remove('hidden');
+  setTimeout(() => $('tx-amount').focus(), 50);
+}
+
+function closeTxForm() {
+  $('tx-modal').classList.add('hidden');
+}
+
+function onTxModalBgClick(e) {
+  if (e.target.id === 'tx-modal') closeTxForm();
+}
+
+function populateTxFormDropdowns() {
+  const wallets = (LOOKUPS && LOOKUPS.wallets) || [];
+  const walletOpts = '<option value="">— Pick wallet —</option>' +
+    wallets.map(w => {
+      const icon = TYPE_ICONS[w.type] || '•';
+      const name = w.name_en || w.name_ar || `Wallet ${w.id}`;
+      return `<option value="${w.id}">${icon} ${escapeHtml(name)}</option>`;
+    }).join('');
+  $('tx-from-wallet').innerHTML = walletOpts;
+  $('tx-to-wallet').innerHTML = walletOpts;
+
+  $('tx-category').innerHTML = renderCategoryOptions('— Pick category —');
+
+  const places = (LOOKUPS && LOOKUPS.places) || [];
+  $('tx-place').innerHTML = '<option value="">— None —</option>' +
+    places.map(p => {
+      let label = p.branch_name || `Place ${p.id}`;
+      if (p.chain_name && p.chain_name !== p.branch_name) label += ` · ${p.chain_name}`;
+      return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+    }).join('') +
+    '<option value="__create__">➕ New place…</option>';
+
+  const items = (LOOKUPS && LOOKUPS.items) || [];
+  $('tx-item').innerHTML = '<option value="">— None —</option>' +
+    items.map(it => {
+      let label = it.canonical_name_en || it.canonical_name_ar || `Item ${it.id}`;
+      if (it.size) label += ` (${it.size})`;
+      return `<option value="${it.id}">${escapeHtml(label)}</option>`;
+    }).join('') +
+    '<option value="__create__">➕ New item…</option>';
+}
+
+function selectedTxType() {
+  const r = document.querySelector('input[name="tx-type"]:checked');
+  return r ? r.value : 'spend';
+}
+
+function onTypeChange() {
+  const t = selectedTxType();
+  // Show/hide fields per type:
+  //   spend    → from + category + place + item + note
+  //   income   → to   + category +                  note
+  //   transfer → from + to       (no category, place, item)
+  $('tx-from-wallet-field').classList.toggle('hidden', t === 'income');
+  $('tx-to-wallet-field').classList.toggle('hidden', t === 'spend');
+  $('tx-category-field').classList.toggle('hidden', t === 'transfer');
+  $('tx-place-item-fields').classList.toggle('hidden', t === 'transfer' || t === 'income');
+}
+
+function onPlaceChange() {
+  if ($('tx-place').value === '__create__') {
+    $('tx-place').value = '';
+    $('tx-new-place-panel').classList.remove('hidden');
+    setTimeout(() => $('tx-new-place-branch').focus(), 50);
+  }
+}
+
+function cancelInlinePlace() {
+  $('tx-new-place-panel').classList.add('hidden');
+  $('tx-new-place-branch').value = '';
+  $('tx-new-place-chain').value = '';
+}
+
+async function createInlinePlace() {
+  const branch = $('tx-new-place-branch').value.trim();
+  const chain = $('tx-new-place-chain').value.trim();
+  if (!branch) {
+    toast('Branch name is required', 'error');
+    return;
+  }
+  try {
+    const place = await fetchJSON('/api/places', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch_name: branch, chain_name: chain || null }),
+    });
+    await ensureLookups(true);
+    populateTxFormDropdowns();
+    $('tx-place').value = place.id;
+    cancelInlinePlace();
+    toast('Place created', 'success');
+  } catch (e) {
+    toast('Failed to create place: ' + (e.message || ''), 'error');
+  }
+}
+
+function onItemChange() {
+  if ($('tx-item').value === '__create__') {
+    $('tx-item').value = '';
+    $('tx-new-item-panel').classList.remove('hidden');
+    setTimeout(() => $('tx-new-item-name').focus(), 50);
+  }
+}
+
+function cancelInlineItem() {
+  $('tx-new-item-panel').classList.add('hidden');
+  $('tx-new-item-name').value = '';
+  $('tx-new-item-size').value = '';
+  $('tx-new-item-unit').value = '';
+}
+
+async function createInlineItem() {
+  const name = $('tx-new-item-name').value.trim();
+  const size = $('tx-new-item-size').value.trim();
+  const unit = $('tx-new-item-unit').value.trim();
+  if (!name) {
+    toast('Item name is required', 'error');
+    return;
+  }
+  const defaultCat = parseInt($('tx-category').value, 10) || null;
+  try {
+    const item = await fetchJSON('/api/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        canonical_name_en: name,
+        size: size || null, unit: unit || null,
+        default_category_id: defaultCat,
+      }),
+    });
+    await ensureLookups(true);
+    populateTxFormDropdowns();
+    $('tx-item').value = item.id;
+    cancelInlineItem();
+    toast('Item created', 'success');
+  } catch (e) {
+    toast('Failed to create item: ' + (e.message || ''), 'error');
+  }
+}
+
+async function saveTxForm() {
+  $('tx-amount-error').textContent = '';
+  $('tx-form-error').textContent = '';
+  const saveBtn = $('tx-form-save');
+  saveBtn.disabled = true;
+
+  const type = selectedTxType();
+  let amount;
+  try {
+    amount = parseAmountToCents($('tx-amount').value);
+    if (amount <= 0) throw new Error('amount must be > 0');
+  } catch (e) {
+    $('tx-amount-error').textContent = e.message || 'invalid amount';
+    saveBtn.disabled = false;
+    return;
+  }
+
+  const dateStr = $('tx-date').value;
+  const occurredAt = dateStr ? `${dateStr}T12:00:00Z` : null;
+
+  const fromW = $('tx-from-wallet').value || null;
+  const toW   = $('tx-to-wallet').value   || null;
+  const cat   = $('tx-category').value    || null;
+  const place = $('tx-place').value       || null;
+  const item  = $('tx-item').value        || null;
+  const note  = $('tx-note').value.trim() || null;
+  const refundOf = $('tx-refund-of').value || null;
+
+  const body = {
+    type,
+    amount_cents: amount,
+    occurred_at: occurredAt,
+    note,
+  };
+
+  if (type === 'spend') {
+    body.source_wallet_id = fromW ? +fromW : null;
+    body.category_id = cat ? +cat : null;
+    body.place_id = place ? +place : null;
+    body.item_id = item ? +item : null;
+  } else if (type === 'income') {
+    body.dest_wallet_id = toW ? +toW : null;
+    body.category_id = cat ? +cat : null;
+  } else if (type === 'transfer') {
+    body.source_wallet_id = fromW ? +fromW : null;
+    body.dest_wallet_id = toW ? +toW : null;
+    if (body.source_wallet_id && body.dest_wallet_id &&
+        body.source_wallet_id === body.dest_wallet_id) {
+      $('tx-form-error').textContent = 'Source and destination wallets must differ.';
+      saveBtn.disabled = false;
+      return;
+    }
+  } else if (type === 'refund') {
+    body.dest_wallet_id = toW ? +toW : null;
+    body.refund_of_id = refundOf ? +refundOf : null;
+    body.category_id = cat ? +cat : null;
+    body.item_id = item ? +item : null;
+    body.place_id = place ? +place : null;
+  }
+
+  try {
+    if (TX_FORM_MODE === 'create') {
+      await fetchJSON('/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Transaction added', 'success');
+    } else {
+      const id = parseInt($('tx-id').value, 10);
+      await fetchJSON(`/api/transactions/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Transaction updated', 'success');
+    }
+    closeTxForm();
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    $('tx-form-error').textContent = e.message || 'save failed';
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+// ---------- Confirm modal ----------
+
+let _pendingConfirm = null;
+
+function openConfirm(title, message, okLabel = 'Confirm', okClass = 'btn-danger') {
+  return new Promise(resolve => {
+    $('confirm-title').textContent = title;
+    $('confirm-message').textContent = message;
+    const btn = $('confirm-ok-btn');
+    btn.textContent = okLabel;
+    btn.className = okClass;
+    btn.onclick = () => { closeConfirm(); resolve(true); };
+    _pendingConfirm = resolve;
+    $('confirm-modal').classList.remove('hidden');
+  });
+}
+
+function closeConfirm() {
+  $('confirm-modal').classList.add('hidden');
+  if (_pendingConfirm) { _pendingConfirm(false); _pendingConfirm = null; }
+}
+
+// ---------- Delete / Restore ----------
+
+async function confirmDeleteTx(id) {
+  const ok = await openConfirm(
+    'Delete transaction?',
+    `This soft-deletes transaction #${id}. You can restore it from the "Show deleted" filter.`,
+    'Delete',
+  );
+  if (!ok) return;
+  try {
+    await fetchJSON(`/api/transactions/${id}`, { method: 'DELETE' });
+    toast('Transaction deleted', 'success');
+    refreshCurrent();
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || ''), 'error');
+  }
+}
+
+async function restoreTx(id) {
+  try {
+    await fetchJSON(`/api/transactions/${id}/restore`, { method: 'POST' });
+    toast('Transaction restored', 'success');
+    refreshCurrent();
+  } catch (e) {
+    toast('Restore failed: ' + (e.message || ''), 'error');
+  }
+}
+
+// ---------- Items / Places (W3) ----------
 
 const _itemCharts = new Map();
 
@@ -528,7 +939,7 @@ function renderItemsTable(items) {
   $('items-meta').textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
   const wrap = $('items-table-wrap');
   if (items.length === 0) {
-    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No items yet. Add some via the bot.</div>';
+    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No items yet.</div>';
     return;
   }
   const trs = items.map(it => `
@@ -569,21 +980,15 @@ async function toggleItemDetail(id) {
   if (!row) return;
   const wasHidden = row.classList.contains('hidden');
   row.classList.toggle('hidden');
-  if (wasHidden) {
-    await populateItemDetail(id);
-  }
+  if (wasHidden) await populateItemDetail(id);
 }
 
 async function populateItemDetail(id) {
   const body = $(`item-detail-body-${id}`);
   body.innerHTML = '<div class="muted small">Loading…</div>';
   let data;
-  try {
-    data = await fetchJSON(`/api/items/${id}`);
-  } catch (e) {
-    body.innerHTML = `<div class="muted small">Failed to load: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
+  try { data = await fetchJSON(`/api/items/${id}`); }
+  catch (e) { body.innerHTML = `<div class="muted small">Failed: ${escapeHtml(e.message)}</div>`; return; }
   const { item, places, summary } = data;
 
   const summaryHtml = `
@@ -600,61 +1005,46 @@ async function populateItemDetail(id) {
   const placesHtml = places.length === 0 ? '' : `
     <h4 class="detail-section-title">Per-place price history</h4>
     <table class="tx-table compact">
-      <thead>
-        <tr>
-          <th>Place</th>
-          <th>Observations</th>
-          <th class="col-amount">Min</th>
-          <th class="col-amount">Last</th>
-          <th class="col-amount">Max</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${places.map(p => `
+      <thead><tr><th>Place</th><th>Observations</th><th class="col-amount">Min</th><th class="col-amount">Last</th><th class="col-amount">Max</th></tr></thead>
+      <tbody>${places.map(p => `
           <tr>
             <td>${escapeHtml(placeLabel(p))}</td>
             <td>${p.observation_count}</td>
             <td class="col-amount">${fmtAmount(p.min_cents)}</td>
             <td class="col-amount">${fmtAmount(p.last_cents)}</td>
             <td class="col-amount">${fmtAmount(p.max_cents)}</td>
-          </tr>
-        `).join('')}
-      </tbody>
+          </tr>`).join('')}</tbody>
     </table>
   `;
 
   const chartHtml = places.length > 0 ? `
     <h4 class="detail-section-title">Price chart</h4>
     <div class="chart-wrap"><canvas id="item-chart-${id}"></canvas></div>
-  ` : '<div class="muted small" style="margin-top:12px;">No price observations yet. Buy this item again from the bot to start the history.</div>';
+  ` : '<div class="muted small" style="margin-top:12px;">No price observations yet.</div>';
 
   body.innerHTML = summaryHtml + chartHtml + placesHtml;
-
-  if (places.length > 0) {
-    drawItemChart(id, places);
-  }
+  if (places.length > 0) drawItemChart(id, places);
 }
 
 function drawItemChart(id, places) {
   const canvas = $(`item-chart-${id}`);
   if (!canvas) return;
-  if (_itemCharts.has(id)) {
-    _itemCharts.get(id).destroy();
-    _itemCharts.delete(id);
-  }
+  if (_itemCharts.has(id)) { _itemCharts.get(id).destroy(); _itemCharts.delete(id); }
   if (typeof Chart === 'undefined') {
     canvas.parentElement.innerHTML = '<div class="muted small">Chart library unavailable.</div>';
     return;
   }
+  const allDates = new Set();
+  places.forEach(p => p.observations.forEach(o => allDates.add(o.observed_at)));
+  const labels = Array.from(allDates).sort();
+  const labelDisplay = labels.map(d => fmtDateAbsolute(d).replace(/, \d{2}:\d{2}$/, ''));
 
   const datasets = places.map((p, i) => {
     const color = CHART_PALETTE[i % CHART_PALETTE.length];
+    const map = new Map(p.observations.map(o => [o.observed_at, o.price_cents / 100]));
     return {
       label: placeLabel(p),
-      data: p.observations.map(o => ({
-        x: o.observed_at,
-        y: o.price_cents / 100,  // EGP for display
-      })),
+      data: labels.map(d => map.has(d) ? map.get(d) : null),
       borderColor: color,
       backgroundColor: color,
       pointRadius: 4,
@@ -665,105 +1055,26 @@ function drawItemChart(id, places) {
 
   const chart = new Chart(canvas.getContext('2d'), {
     type: 'line',
-    data: { datasets },
+    data: { labels: labelDisplay, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      parsing: false,
       scales: {
-        x: {
-          type: 'time',
-          time: { tooltipFormat: 'yyyy-LL-dd HH:mm', unit: 'day' },
-          ticks: { color: '#94a3b8' },
-          grid: { color: '#334155' },
-        },
+        x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
         y: {
-          ticks: {
-            color: '#94a3b8',
-            callback: v => v.toLocaleString('en-US') + ' EGP',
-          },
+          ticks: { color: '#94a3b8', callback: v => v.toLocaleString('en-US') + ' EGP' },
           grid: { color: '#334155' },
           beginAtZero: false,
         },
       },
       plugins: {
         legend: { labels: { color: '#e2e8f0' } },
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP`,
-          },
-        },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP` } },
       },
     },
   });
-
   _itemCharts.set(id, chart);
 }
-
-// Chart.js v4 needs a date adapter for time scales — bring in luxon adapter on demand.
-// We avoid the adapter dependency by formatting x as a date string and using 'category' scale instead.
-// Override above to use category if time adapter unavailable:
-(function patchChartTimeFallback() {
-  // Detect if time adapter is missing and switch scale type lazily
-  const orig = drawItemChart;
-  window.drawItemChart = function(id, places) {
-    const canvas = $(`item-chart-${id}`);
-    if (!canvas) return;
-    if (_itemCharts.has(id)) { _itemCharts.get(id).destroy(); _itemCharts.delete(id); }
-    if (typeof Chart === 'undefined') {
-      canvas.parentElement.innerHTML = '<div class="muted small">Chart library unavailable.</div>';
-      return;
-    }
-    // Build labels (sorted union of all observation timestamps) for category-x chart
-    const allDates = new Set();
-    places.forEach(p => p.observations.forEach(o => allDates.add(o.observed_at)));
-    const labels = Array.from(allDates).sort();
-    const labelDisplay = labels.map(d => fmtDateAbsolute(d).replace(/, \d{2}:\d{2}$/, ''));
-
-    const datasets = places.map((p, i) => {
-      const color = CHART_PALETTE[i % CHART_PALETTE.length];
-      const map = new Map(p.observations.map(o => [o.observed_at, o.price_cents / 100]));
-      return {
-        label: placeLabel(p),
-        data: labels.map(d => map.has(d) ? map.get(d) : null),
-        borderColor: color,
-        backgroundColor: color,
-        pointRadius: 4,
-        tension: 0.2,
-        spanGaps: true,
-      };
-    });
-
-    const chart = new Chart(canvas.getContext('2d'), {
-      type: 'line',
-      data: { labels: labelDisplay, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
-          y: {
-            ticks: {
-              color: '#94a3b8',
-              callback: v => v.toLocaleString('en-US') + ' EGP',
-            },
-            grid: { color: '#334155' },
-            beginAtZero: false,
-          },
-        },
-        plugins: {
-          legend: { labels: { color: '#e2e8f0' } },
-          tooltip: {
-            callbacks: {
-              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP`,
-            },
-          },
-        },
-      },
-    });
-    _itemCharts.set(id, chart);
-  };
-})();
 
 // ---------- Places ----------
 
@@ -786,7 +1097,7 @@ function renderPlacesTable(places) {
   $('places-meta').textContent = `${places.length} place${places.length === 1 ? '' : 's'}`;
   const wrap = $('places-table-wrap');
   if (places.length === 0) {
-    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No places yet. Add some via the bot.</div>';
+    wrap.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">No places yet.</div>';
     return;
   }
   const trs = places.map(p => `
@@ -825,21 +1136,15 @@ async function togglePlaceDetail(id) {
   if (!row) return;
   const wasHidden = row.classList.contains('hidden');
   row.classList.toggle('hidden');
-  if (wasHidden) {
-    await populatePlaceDetail(id);
-  }
+  if (wasHidden) await populatePlaceDetail(id);
 }
 
 async function populatePlaceDetail(id) {
   const body = $(`place-detail-body-${id}`);
   body.innerHTML = '<div class="muted small">Loading…</div>';
   let data;
-  try {
-    data = await fetchJSON(`/api/places/${id}`);
-  } catch (e) {
-    body.innerHTML = `<div class="muted small">Failed to load: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
+  try { data = await fetchJSON(`/api/places/${id}`); }
+  catch (e) { body.innerHTML = `<div class="muted small">Failed: ${escapeHtml(e.message)}</div>`; return; }
   const { summary, top_items, recent } = data;
 
   const summaryHtml = `
@@ -850,31 +1155,19 @@ async function populatePlaceDetail(id) {
       <div class="kv-tile"><span>Last visit</span><strong>${summary.last_used ? fmtDateRelative(summary.last_used) : '—'}</strong></div>
     </div>
   `;
-
   const topItemsHtml = top_items.length === 0 ? '' : `
     <h4 class="detail-section-title">Top items bought here</h4>
     <table class="tx-table compact">
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th class="hide-mobile">Times bought</th>
-          <th class="col-amount">Last price</th>
-          <th class="col-amount">Total spent</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${top_items.map(it => `
+      <thead><tr><th>Item</th><th class="hide-mobile">Times bought</th><th class="col-amount">Last price</th><th class="col-amount">Total spent</th></tr></thead>
+      <tbody>${top_items.map(it => `
           <tr>
             <td>${escapeHtml(itemLabel(it))}</td>
             <td class="hide-mobile">${it.tx_count}</td>
             <td class="col-amount">${fmtAmount(it.last_price_cents)}</td>
             <td class="col-amount">${fmtAmount(it.total_spent_cents)}</td>
-          </tr>
-        `).join('')}
-      </tbody>
+          </tr>`).join('')}</tbody>
     </table>
   `;
-
   const recentHtml = recent.length === 0 ? '' : `
     <h4 class="detail-section-title">Recent transactions</h4>
     <div class="tx-list">
@@ -890,16 +1183,12 @@ async function populatePlaceDetail(id) {
         parts.push(fmtDateRelative(t.occurred_at));
         return `<div class="tx-row">
           <div class="tx-icon">${icon}</div>
-          <div class="tx-mid">
-            <div class="tx-line1">${escapeHtml(cat)}</div>
-            <div class="tx-line2">${parts.join(' · ')}</div>
-          </div>
+          <div class="tx-mid"><div class="tx-line1">${escapeHtml(cat)}</div><div class="tx-line2">${parts.join(' · ')}</div></div>
           <div class="tx-amount ${cls}">${sign}${fmtAmount(t.amount_cents).replace('-', '')}</div>
         </div>`;
       }).join('')}
     </div>
   `;
-
   body.innerHTML = summaryHtml + topItemsHtml + recentHtml;
 }
 
@@ -937,4 +1226,18 @@ window.gotoPage = gotoPage;
 window.toggleTxDetail = toggleTxDetail;
 window.toggleItemDetail = toggleItemDetail;
 window.togglePlaceDetail = togglePlaceDetail;
+window.openTxForm = openTxForm;
+window.closeTxForm = closeTxForm;
+window.onTxModalBgClick = onTxModalBgClick;
+window.onTypeChange = onTypeChange;
+window.onPlaceChange = onPlaceChange;
+window.onItemChange = onItemChange;
+window.cancelInlinePlace = cancelInlinePlace;
+window.cancelInlineItem = cancelInlineItem;
+window.createInlinePlace = createInlinePlace;
+window.createInlineItem = createInlineItem;
+window.saveTxForm = saveTxForm;
+window.confirmDeleteTx = confirmDeleteTx;
+window.restoreTx = restoreTx;
+window.closeConfirm = closeConfirm;
 window.addEventListener('DOMContentLoaded', init);

@@ -8,10 +8,10 @@ services:
     networks:
       - coolify
     volumes:
-      # Read-only bind-mount of finance-bot's Coolify-managed Docker volume.
-      # Both apps reach the same SQLite file; WAL mode handles concurrent reads.
-      # When W4 needs writes, drop the ":ro" suffix.
-      - /var/lib/docker/volumes/h84occok4wk4gs4888woc8kc_finance-bot-data/_data:/app/data:ro
+      # Bind-mount of finance-bot's Coolify-managed Docker volume.
+      # Both apps reach the same SQLite file; WAL mode (set by the bot) handles
+      # concurrent reads + writes. The web is the second writer as of W4.
+      - /var/lib/docker/volumes/h84occok4wk4gs4888woc8kc_finance-bot-data/_data:/app/data
 
 networks:
   coolify:
