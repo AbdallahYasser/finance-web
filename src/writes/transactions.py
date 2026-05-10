@@ -86,7 +86,7 @@ async def insert_transaction(
                refund_of_id,
                occurred_at, note,
                source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'web')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual')
             """,
             (
                 type, amount_cents,

@@ -118,7 +118,9 @@ async def w4_db(monkeypatch):
                 source_wallet_id INTEGER, dest_wallet_id INTEGER,
                 category_id INTEGER, item_id INTEGER, place_id INTEGER,
                 refund_of_id INTEGER, occurred_at TEXT NOT NULL,
-                note TEXT, source TEXT DEFAULT 'manual',
+                note TEXT,
+                source TEXT NOT NULL DEFAULT 'manual'
+                  CHECK (source IN ('manual','sms','recurring','wizard')),
                 created_at TEXT DEFAULT (datetime('now')),
                 deleted_at TEXT
             )
