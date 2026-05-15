@@ -20,7 +20,8 @@ async def seeded_bot_db(monkeypatch):
                 language TEXT DEFAULT 'en',
                 timezone TEXT DEFAULT 'Africa/Cairo',
                 salary_day INTEGER,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
             )
         """)
         await db.execute("""
@@ -107,7 +108,8 @@ async def w4_db(monkeypatch):
                 language TEXT DEFAULT 'en',
                 timezone TEXT DEFAULT 'Africa/Cairo',
                 salary_day INTEGER,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
             )
         """)
         await db.execute("""

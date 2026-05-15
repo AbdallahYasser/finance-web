@@ -22,6 +22,10 @@ from src.queries import lookups as q_lookups
 from src.queries import items as q_items
 from src.queries import places as q_places
 from src.writes import transactions as w_tx
+from src.writes import places as w_places
+from src.writes import items as w_items
+from src.writes import wallets as w_wallets
+from src.writes import users as w_users
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -232,6 +236,301 @@ async def place_detail(place_id: int, user_id: int = Depends(auth.get_current_us
     if not detail:
         raise HTTPException(status_code=404, detail="Place not found")
     return detail
+
+
+# ---------- W5: Wallet / Place / Item CRUD + aliases ----------
+
+@app.post("/api/wallets", status_code=201)
+async def wallets_create(
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        wallet_id = await w_wallets.insert_wallet(
+            name_en=body.get("name_en"),
+            name_ar=body.get("name_ar"),
+            type=body.get("type"),
+            initial_balance_cents=int(body.get("initial_balance_cents", 0)),
+            karat=body.get("karat"),
+            gold_grams_milligrams=body.get("gold_grams_milligrams"),
+            gold_price_per_gram_cents=body.get("gold_price_per_gram_cents"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    for w in await q_wallets.list_with_balances():
+        if w["id"] == wallet_id:
+            return w
+    raise HTTPException(status_code=500, detail="Wallet created but not retrievable")
+
+
+@app.put("/api/wallets/{wallet_id}")
+async def wallets_update(
+    wallet_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    fields = {k: body[k] for k in (
+        "name_en", "name_ar", "initial_balance_cents",
+        "karat", "gold_grams_milligrams", "gold_price_per_gram_cents",
+    ) if k in body}
+    try:
+        ok = await w_wallets.update_wallet(wallet_id, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    for w in await q_wallets.list_with_balances():
+        if w["id"] == wallet_id:
+            return w
+    raise HTTPException(status_code=404, detail="Wallet not found")
+
+
+@app.delete("/api/wallets/{wallet_id}", status_code=204)
+async def wallets_delete(
+    wallet_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_wallets.soft_delete(wallet_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Wallet not found or already deleted")
+    return Response(status_code=204)
+
+
+@app.post("/api/wallets/{wallet_id}/restore")
+async def wallets_restore(
+    wallet_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_wallets.restore(wallet_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Wallet not found or not deleted")
+    return {"ok": True, "id": wallet_id}
+
+
+@app.put("/api/places/{place_id}")
+async def places_update(
+    place_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    fields = {k: body[k] for k in ("branch_name", "chain_name") if k in body}
+    try:
+        ok = await w_places.update_place(place_id, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Place not found")
+    return {"ok": True, "id": place_id}
+
+
+@app.delete("/api/places/{place_id}", status_code=204)
+async def places_delete(
+    place_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_places.soft_delete(place_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Place not found or already deleted")
+    return Response(status_code=204)
+
+
+@app.post("/api/places/{place_id}/restore")
+async def places_restore(
+    place_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_places.restore(place_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Place not found or not deleted")
+    return {"ok": True, "id": place_id}
+
+
+@app.put("/api/items/{item_id}")
+async def items_update(
+    item_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    fields = {k: body[k] for k in (
+        "canonical_name_en", "canonical_name_ar",
+        "size", "unit", "default_category_id",
+    ) if k in body}
+    try:
+        ok = await w_items.update_item(item_id, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"ok": True, "id": item_id}
+
+
+@app.delete("/api/items/{item_id}", status_code=204)
+async def items_delete(
+    item_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_items.soft_delete(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found or already deleted")
+    return Response(status_code=204)
+
+
+@app.post("/api/items/{item_id}/restore")
+async def items_restore(
+    item_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_items.restore(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found or not deleted")
+    return {"ok": True, "id": item_id}
+
+
+@app.get("/api/items/{item_id}/aliases")
+async def aliases_list(
+    item_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    return {"aliases": await w_items.list_aliases(item_id)}
+
+
+@app.post("/api/items/{item_id}/aliases", status_code=201)
+async def aliases_add(
+    item_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        alias_id = await w_items.add_alias(item_id, body.get("alias_text", ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": alias_id, "alias_text": (body.get("alias_text") or "").strip()}
+
+
+@app.delete("/api/aliases/{alias_id}", status_code=204)
+async def aliases_remove(
+    alias_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_items.remove_alias(alias_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alias not found or already removed")
+    return Response(status_code=204)
+
+
+# ---------- W11: language toggle ----------
+
+@app.put("/api/me/language")
+async def set_language(
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    language = body.get("language")
+    try:
+        ok = await w_users.set_language(user_id, language)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True, "language": language}
+
+
+# ---------- W12: CSV export ----------
+
+import csv as _csv
+import io as _io
+from datetime import datetime as _dt, timezone as _tz
+from fastapi.responses import StreamingResponse
+
+
+def _csv_format_amount(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    cents = abs(cents)
+    whole, frac = divmod(cents, 100)
+    return f"{sign}{whole}.{frac:02d}"
+
+
+async def _csv_row_generator(rows: list[dict]):
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow([
+        "id", "date", "type", "amount_egp",
+        "category", "item", "size", "place", "chain",
+        "source_wallet", "dest_wallet", "note", "occurred_at_utc",
+    ])
+    yield buf.getvalue()
+    buf.seek(0); buf.truncate()
+
+    for t in rows:
+        date_local = (t.get("occurred_at") or "")[:10]
+        writer.writerow([
+            t.get("id", ""),
+            date_local,
+            t.get("type", ""),
+            _csv_format_amount(t.get("amount_cents") or 0),
+            t.get("category_name") or "",
+            t.get("item_name") or "",
+            t.get("item_size") or "",
+            t.get("place_branch") or "",
+            t.get("place_chain") or "",
+            t.get("source_wallet_name") or "",
+            t.get("dest_wallet_name") or "",
+            (t.get("note") or "").replace("\r", " ").replace("\n", " "),
+            t.get("occurred_at") or "",
+        ])
+        yield buf.getvalue()
+        buf.seek(0); buf.truncate()
+
+
+@app.get("/api/transactions/export.csv")
+async def transactions_export_csv(
+    user_id: int = Depends(auth.get_current_user),
+    date_from: str | None = None,
+    date_to:   str | None = None,
+    category_id: int | None = None,
+    place_id:    int | None = None,
+    item_id:     int | None = None,
+    wallet_id:   int | None = None,
+    type:        str | None = None,
+    q:           str | None = None,
+    sort:        str = "date_desc",
+    include_deleted: bool = False,
+):
+    rate_limit("export", user_id, max_per_minute=5)
+    payload = await q_tx.search(
+        date_from=date_from, date_to=date_to,
+        category_id=category_id, place_id=place_id,
+        item_id=item_id, wallet_id=wallet_id,
+        tx_type=type, q=q, sort=sort,
+        page=1, page_size=10_000,
+        include_deleted=include_deleted,
+    )
+    stamp = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    return StreamingResponse(
+        _csv_row_generator(payload["rows"]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="transactions-{stamp}.csv"'},
+    )
+    return Response(status_code=204)
 
 
 @app.get("/api/dashboard")
