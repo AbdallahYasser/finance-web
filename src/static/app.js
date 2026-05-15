@@ -22,6 +22,10 @@ const I18N = {
     'nav.wallets':      'Wallets',
     'nav.items':        'Items',
     'nav.places':       'Places',
+    'nav.debts':        'Debts',
+    'action.new_debt':  '+ New debt',
+    'page.debts.title': 'Debts overview',
+    'page.debts.people':'People',
     'action.add':       '+ Add',
     'action.logout':    'Logout',
     'action.cancel':    'Cancel',
@@ -41,6 +45,10 @@ const I18N = {
     'nav.wallets':      'المحافظ',
     'nav.items':        'الأصناف',
     'nav.places':       'الأماكن',
+    'nav.debts':        'الديون',
+    'action.new_debt':  '+ دين جديد',
+    'page.debts.title': 'ملخص الديون',
+    'page.debts.people':'الأشخاص',
     'action.add':       '+ إضافة',
     'action.logout':    'خروج',
     'action.cancel':    'إلغاء',
@@ -309,7 +317,7 @@ async function logout() {
 // ---------- Routing ----------
 
 let currentRoute = 'dashboard';
-const ROUTES = ['dashboard', 'transactions', 'wallets', 'items', 'places'];
+const ROUTES = ['dashboard', 'transactions', 'wallets', 'debts', 'items', 'places'];
 
 function setRoute(route) {
   currentRoute = route;
@@ -331,6 +339,7 @@ function refreshCurrent() {
   if (currentRoute === 'dashboard')    return loadDashboard();
   if (currentRoute === 'transactions') return loadTransactions();
   if (currentRoute === 'wallets')      return loadWalletsPage();
+  if (currentRoute === 'debts')        return loadDebts();
   if (currentRoute === 'items')        return loadItems();
   if (currentRoute === 'places')       return loadPlaces();
 }
@@ -1687,6 +1696,310 @@ async function removeAlias(itemId, aliasId) {
   }
 }
 
+// ---------- Debts (W7) ----------
+
+async function loadDebts() {
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  $('debts-people-list').innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">Loading…</div>';
+  try {
+    const data = await fetchJSON('/api/people');
+    renderDebtsPage(data.people || []);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
+    $('debts-people-list').innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function renderDebtsPage(people) {
+  // Summary tile
+  let owed_to_you = 0, you_owe = 0;
+  for (const p of people) {
+    if (p.balance_cents > 0) owed_to_you += p.balance_cents;
+    else if (p.balance_cents < 0) you_owe += -p.balance_cents;
+  }
+  const net = owed_to_you - you_owe;
+  $('debts-summary').innerHTML = `
+    <div style="display:flex;justify-content:space-around;flex-wrap:wrap;gap:16px;margin-top:8px;">
+      <div><div class="muted small">Owed to you</div><div style="font-size:24px;color:var(--good);font-variant-numeric:tabular-nums;">+${escapeHtml(fmtAmount(owed_to_you).replace('-', ''))}</div></div>
+      <div><div class="muted small">You owe</div><div style="font-size:24px;color:var(--danger);font-variant-numeric:tabular-nums;">−${escapeHtml(fmtAmount(you_owe).replace('-', ''))}</div></div>
+      <div><div class="muted small">Net</div><div style="font-size:24px;font-variant-numeric:tabular-nums;">${escapeHtml(fmtAmount(net))}</div></div>
+    </div>
+  `;
+
+  const root = $('debts-people-list');
+  if (people.length === 0) {
+    root.innerHTML = '<div class="muted small">No people yet. Tap <b>+ New debt</b>.</div>';
+    return;
+  }
+  root.innerHTML = people.map(p => {
+    const status = p.balance_cents > 0
+      ? `<span style="color:var(--good)">owes you ${fmtAmount(p.balance_cents)}</span>`
+      : p.balance_cents < 0
+      ? `<span style="color:var(--danger)">you owe ${fmtAmount(-p.balance_cents)}</span>`
+      : `<span class="muted">settled</span>`;
+    return `
+      <div class="wallet-row" onclick="togglePersonDebts(${p.id})" style="cursor:pointer;">
+        <div class="wallet-name">
+          <span class="wallet-icon">👤</span>
+          <span>
+            <div>${escapeHtml(p.name)}</div>
+            <div class="wallet-meta">${status} · ${p.debt_count || 0} debt(s)</div>
+          </span>
+        </div>
+        <div class="wallet-balance" style="font-variant-numeric:tabular-nums;">${fmtAmount(p.balance_cents)}</div>
+      </div>
+      <div id="person-debts-${p.id}" class="hidden" style="margin: 0 0 12px 44px;"></div>
+    `;
+  }).join('');
+}
+
+async function togglePersonDebts(personId) {
+  const root = $(`person-debts-${personId}`);
+  if (!root) return;
+  if (!root.classList.contains('hidden')) {
+    root.classList.add('hidden');
+    return;
+  }
+  root.classList.remove('hidden');
+  root.innerHTML = '<div class="muted small">Loading…</div>';
+  try {
+    const data = await fetchJSON(`/api/people/${personId}/debts`);
+    renderPersonDebts(personId, data.debts || []);
+  } catch (e) {
+    root.innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderPersonDebts(personId, debts) {
+  const root = $(`person-debts-${personId}`);
+  if (debts.length === 0) {
+    root.innerHTML = '<div class="muted small">No debts.</div>';
+    return;
+  }
+  root.innerHTML = debts.map(d => {
+    const directionLabel = d.direction === 'lent' ? 'You lent' : 'You borrowed';
+    const statusBadge = `<span style="font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg);color:var(--muted);">${d.status}</span>`;
+    let actions = '';
+    if (d.status === 'open' || d.status === 'partial') {
+      actions = `
+        <button onclick="event.stopPropagation();openRepayForm(${d.id})">💸 Repay</button>
+        <button class="btn-danger" onclick="event.stopPropagation();confirmForgiveDebt(${d.id})">✋ Forgive</button>
+      `;
+    }
+    return `
+      <div class="card" style="padding:12px 16px;margin-top:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div>${directionLabel} ${fmtAmount(d.original_amount_cents)} ${statusBadge}</div>
+            <div class="muted small">
+              Opened ${fmtDateRelative(d.opened_at)}
+              · Repaid ${fmtAmount(d.repaid_cents)}
+              · Remaining ${fmtAmount(d.remaining_cents)}
+              ${d.due_at ? ` · Due ${fmtDateRelative(d.due_at)}` : ''}
+            </div>
+            ${d.note ? `<div class="muted small" style="margin-top:4px;">${escapeHtml(d.note)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;">${actions}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ---------- New-debt form ----------
+
+async function openDebtForm() {
+  await ensureLookups();
+  $('debt-form-error').textContent = '';
+  $('debt-amount').value = '';
+  $('debt-note').value = '';
+  $('debt-due').value = '';
+  $('debt-opened').value = new Date().toISOString().slice(0, 10);
+  document.querySelector('input[name="debt-direction"][value="lent"]').checked = true;
+  await populateDebtFormDropdowns();
+  cancelInlinePerson();
+  $('debt-modal').classList.remove('hidden');
+}
+
+function closeDebtForm() { $('debt-modal').classList.add('hidden'); }
+function onDebtModalBgClick(e) { if (e.target.id === 'debt-modal') closeDebtForm(); }
+
+async function populateDebtFormDropdowns() {
+  // People (fetch fresh list)
+  let people;
+  try {
+    const data = await fetchJSON('/api/people');
+    people = data.people || [];
+  } catch (_) { people = []; }
+  $('debt-person').innerHTML = '<option value="">— Pick person —</option>' +
+    people.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('') +
+    '<option value="__create__">➕ New person…</option>';
+
+  const wallets = (LOOKUPS.wallets || []);
+  $('debt-wallet').innerHTML = '<option value="">— Pick wallet —</option>' +
+    wallets.map(w => {
+      const icon = TYPE_ICONS[w.type] || '•';
+      const name = w.name_en || w.name_ar || `Wallet ${w.id}`;
+      return `<option value="${w.id}">${icon} ${escapeHtml(name)}</option>`;
+    }).join('');
+}
+
+function onDebtPersonChange() {
+  if ($('debt-person').value === '__create__') {
+    $('debt-person').value = '';
+    $('debt-new-person-panel').classList.remove('hidden');
+    setTimeout(() => $('debt-new-person-name').focus(), 50);
+  }
+}
+
+function cancelInlinePerson() {
+  $('debt-new-person-panel').classList.add('hidden');
+  $('debt-new-person-name').value = '';
+}
+
+async function createInlinePerson() {
+  const name = $('debt-new-person-name').value.trim();
+  if (!name) { toast('Name required', 'error'); return; }
+  try {
+    const person = await fetchJSON('/api/people', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    await populateDebtFormDropdowns();
+    $('debt-person').value = person.id;
+    cancelInlinePerson();
+    toast('Person added', 'success');
+  } catch (e) {
+    toast('Failed to add person: ' + (e.message || ''), 'error');
+  }
+}
+
+async function saveDebtForm() {
+  const err = $('debt-form-error');
+  err.textContent = '';
+  const direction = document.querySelector('input[name="debt-direction"]:checked').value;
+  const personId = parseInt($('debt-person').value, 10) || 0;
+  const walletId = parseInt($('debt-wallet').value, 10) || 0;
+  if (!personId) { err.textContent = 'Pick a person.'; return; }
+  if (!walletId) { err.textContent = 'Pick a wallet.'; return; }
+  let amount;
+  try { amount = parseAmountToCents($('debt-amount').value); }
+  catch (e) { err.textContent = 'Amount: ' + e.message; return; }
+  if (amount <= 0) { err.textContent = 'Amount must be > 0.'; return; }
+
+  const openedDate = $('debt-opened').value;
+  const dueDate = $('debt-due').value;
+  const body = {
+    person_id: personId,
+    direction,
+    amount_cents: amount,
+    wallet_id: walletId,
+    opened_at: openedDate ? `${openedDate}T12:00:00Z` : null,
+    due_at: dueDate ? `${dueDate}T12:00:00Z` : null,
+    note: $('debt-note').value.trim() || null,
+  };
+  try {
+    await fetchJSON('/api/debts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast('Debt recorded', 'success');
+    closeDebtForm();
+    refreshCurrent();
+  } catch (e) {
+    err.textContent = e.message || 'save failed';
+  }
+}
+
+// ---------- Repay form ----------
+
+let _REPAY_DEBT = null;
+
+async function openRepayForm(debtId) {
+  $('repay-form-error').textContent = '';
+  try {
+    _REPAY_DEBT = await fetchJSON(`/api/debts/${debtId}`);
+  } catch (e) {
+    toast('Could not load debt: ' + (e.message || ''), 'error');
+    return;
+  }
+  $('repay-debt-id').value = debtId;
+  $('repay-context').textContent =
+    `${_REPAY_DEBT.direction === 'lent' ? 'They owe you' : 'You owe them'}: ` +
+    `${fmtAmount(_REPAY_DEBT.remaining_cents)} of ${fmtAmount(_REPAY_DEBT.original_amount_cents)} ` +
+    `(person: ${_REPAY_DEBT.person_name})`;
+  $('repay-amount').value = (_REPAY_DEBT.remaining_cents / 100).toFixed(2);
+  $('repay-date').value = new Date().toISOString().slice(0, 10);
+
+  await ensureLookups();
+  const wallets = LOOKUPS.wallets || [];
+  $('repay-wallet').innerHTML = '<option value="">— Pick wallet —</option>' +
+    wallets.map(w => {
+      const icon = TYPE_ICONS[w.type] || '•';
+      const name = w.name_en || w.name_ar || `Wallet ${w.id}`;
+      return `<option value="${w.id}">${icon} ${escapeHtml(name)}</option>`;
+    }).join('');
+
+  $('repay-modal').classList.remove('hidden');
+}
+
+function closeRepayForm() { $('repay-modal').classList.add('hidden'); }
+function onRepayModalBgClick(e) { if (e.target.id === 'repay-modal') closeRepayForm(); }
+
+async function saveRepayForm() {
+  const err = $('repay-form-error');
+  err.textContent = '';
+  const debtId = parseInt($('repay-debt-id').value, 10);
+  const walletId = parseInt($('repay-wallet').value, 10) || 0;
+  if (!walletId) { err.textContent = 'Pick a wallet.'; return; }
+  let amount;
+  try { amount = parseAmountToCents($('repay-amount').value); }
+  catch (e) { err.textContent = 'Amount: ' + e.message; return; }
+  if (amount <= 0) { err.textContent = 'Amount must be > 0.'; return; }
+  const date = $('repay-date').value;
+  try {
+    await fetchJSON(`/api/debts/${debtId}/repay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount_cents: amount,
+        wallet_id: walletId,
+        occurred_at: date ? `${date}T12:00:00Z` : null,
+      }),
+    });
+    toast('Repayment recorded', 'success');
+    closeRepayForm();
+    refreshCurrent();
+  } catch (e) {
+    err.textContent = e.message || 'save failed';
+  }
+}
+
+async function confirmForgiveDebt(debtId) {
+  const ok = await openConfirm(
+    'Forgive this debt?',
+    'The remaining balance is written off. A "forgive" transaction is recorded so the ledger stays consistent.',
+    'Forgive',
+  );
+  if (!ok) return;
+  try {
+    await fetchJSON(`/api/debts/${debtId}/forgive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    toast('Debt forgiven', 'success');
+    refreshCurrent();
+  } catch (e) {
+    toast('Forgive failed: ' + (e.message || ''), 'error');
+  }
+}
+
 // ---------- CSV export (W12) ----------
 
 function downloadCSV() {
@@ -1768,4 +2081,18 @@ window.confirmDeleteItem = confirmDeleteItem;
 window.addAlias = addAlias;
 window.removeAlias = removeAlias;
 window.downloadCSV = downloadCSV;
+// W7
+window.openDebtForm = openDebtForm;
+window.closeDebtForm = closeDebtForm;
+window.onDebtModalBgClick = onDebtModalBgClick;
+window.onDebtPersonChange = onDebtPersonChange;
+window.cancelInlinePerson = cancelInlinePerson;
+window.createInlinePerson = createInlinePerson;
+window.saveDebtForm = saveDebtForm;
+window.togglePersonDebts = togglePersonDebts;
+window.openRepayForm = openRepayForm;
+window.closeRepayForm = closeRepayForm;
+window.onRepayModalBgClick = onRepayModalBgClick;
+window.saveRepayForm = saveRepayForm;
+window.confirmForgiveDebt = confirmForgiveDebt;
 window.addEventListener('DOMContentLoaded', init);

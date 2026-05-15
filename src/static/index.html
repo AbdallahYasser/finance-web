@@ -33,6 +33,7 @@
         <a href="#dashboard"    class="nav-link" data-route="dashboard"    data-i18n="nav.dashboard">Dashboard</a>
         <a href="#transactions" class="nav-link" data-route="transactions" data-i18n="nav.transactions">Transactions</a>
         <a href="#wallets"      class="nav-link" data-route="wallets"      data-i18n="nav.wallets">Wallets</a>
+        <a href="#debts"        class="nav-link" data-route="debts"        data-i18n="nav.debts">Debts</a>
         <a href="#items"        class="nav-link" data-route="items"        data-i18n="nav.items">Items</a>
         <a href="#places"       class="nav-link" data-route="places"       data-i18n="nav.places">Places</a>
       </nav>
@@ -158,6 +159,21 @@
         Click any row to see top items bought there + recent transactions.
       </p>
       <div id="places-table-wrap"><div class="muted small">Loading…</div></div>
+    </section>
+  </main>
+
+  <!-- ========= Debts (W7) ========= -->
+  <main id="page-debts" class="content page hidden">
+    <section class="card net-worth-card">
+      <div class="net-worth-label" data-i18n="page.debts.title">Debts</div>
+      <div class="debts-summary" id="debts-summary">—</div>
+    </section>
+    <section class="card">
+      <h3 style="display:flex; justify-content:space-between; align-items:center;">
+        <span data-i18n="page.debts.people">People</span>
+        <button class="btn-primary" onclick="openDebtForm()"><span data-i18n="action.new_debt">+ New debt</span></button>
+      </h3>
+      <div id="debts-people-list"><div class="muted small">Loading…</div></div>
     </section>
   </main>
 
@@ -420,6 +436,103 @@
       <div class="form-error" id="item-form-error"></div>
       <div class="modal-actions">
         <button type="button" onclick="closeItemForm()" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn-primary" data-i18n="action.save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Debt modal (W7) ========= -->
+<div id="debt-modal" class="modal-overlay hidden" onclick="onDebtModalBgClick(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="debt-modal-title">New debt</h2>
+      <button class="modal-close" onclick="closeDebtForm()" title="Close">✕</button>
+    </div>
+    <form id="debt-form" onsubmit="event.preventDefault(); saveDebtForm();" class="tx-form">
+      <div class="form-row">
+        <label>Direction</label>
+        <div class="radio-row">
+          <label class="radio"><input type="radio" name="debt-direction" value="lent" checked> 💸 I lent (someone owes me)</label>
+          <label class="radio"><input type="radio" name="debt-direction" value="borrowed"> 💰 I borrowed (I owe someone)</label>
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="debt-person">Person</label>
+        <select id="debt-person" onchange="onDebtPersonChange()"></select>
+      </div>
+      <div id="debt-new-person-panel" class="inline-create hidden">
+        <div class="form-row">
+          <div class="form-field">
+            <label for="debt-new-person-name">New person — name</label>
+            <input type="text" id="debt-new-person-name" placeholder="e.g. Ahmed" maxlength="80" />
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button type="button" onclick="createInlinePerson()" class="btn-primary">Create</button>
+          <button type="button" onclick="cancelInlinePerson()">Cancel</button>
+        </div>
+      </div>
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="debt-amount">Amount (EGP)</label>
+          <input type="text" id="debt-amount" inputmode="decimal" placeholder="e.g. 500" />
+        </div>
+        <div class="form-field">
+          <label for="debt-wallet">Wallet</label>
+          <select id="debt-wallet"></select>
+        </div>
+      </div>
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="debt-opened">Date</label>
+          <input type="date" id="debt-opened" />
+        </div>
+        <div class="form-field">
+          <label for="debt-due">Due date (optional)</label>
+          <input type="date" id="debt-due" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="debt-note">Note (optional)</label>
+        <textarea id="debt-note" rows="2"></textarea>
+      </div>
+      <div class="form-error" id="debt-form-error"></div>
+      <div class="modal-actions">
+        <button type="button" onclick="closeDebtForm()" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn-primary" data-i18n="action.save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Repay modal (W7) ========= -->
+<div id="repay-modal" class="modal-overlay hidden" onclick="onRepayModalBgClick(event)">
+  <div class="modal-box modal-small" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="repay-modal-title">Repay debt</h2>
+      <button class="modal-close" onclick="closeRepayForm()" title="Close">✕</button>
+    </div>
+    <form id="repay-form" onsubmit="event.preventDefault(); saveRepayForm();" class="tx-form">
+      <input type="hidden" id="repay-debt-id" />
+      <p id="repay-context" class="muted small"></p>
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="repay-amount">Amount (EGP)</label>
+          <input type="text" id="repay-amount" inputmode="decimal" />
+        </div>
+        <div class="form-field">
+          <label for="repay-wallet">Wallet</label>
+          <select id="repay-wallet"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="repay-date">Date</label>
+        <input type="date" id="repay-date" />
+      </div>
+      <div class="form-error" id="repay-form-error"></div>
+      <div class="modal-actions">
+        <button type="button" onclick="closeRepayForm()" data-i18n="action.cancel">Cancel</button>
         <button type="submit" class="btn-primary" data-i18n="action.save">Save</button>
       </div>
     </form>

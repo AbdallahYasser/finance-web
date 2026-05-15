@@ -26,6 +26,11 @@ from src.writes import places as w_places
 from src.writes import items as w_items
 from src.writes import wallets as w_wallets
 from src.writes import users as w_users
+from src.writes import people as w_people
+from src.writes import debts as w_debts
+from src.queries import people as q_people
+from src.queries import debts as q_debts
+from src.web_schema import apply_web_migrations
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -39,6 +44,15 @@ _DEPLOY_TS = str(int(time.time()))
 
 app = FastAPI(docs_url=None, redoc_url=None)
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.on_event("startup")
+async def _startup_migrations():
+    """Run web-side migrations (W7 people/debts tables, etc.) on boot."""
+    try:
+        await apply_web_migrations()
+    except Exception as e:
+        logger.exception("apply_web_migrations failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +447,152 @@ async def aliases_remove(
     if not ok:
         raise HTTPException(status_code=404, detail="Alias not found or already removed")
     return Response(status_code=204)
+
+
+# ---------- W7: People + Debts ----------
+
+@app.get("/api/people")
+async def people_list_endpoint(user_id: int = Depends(auth.get_current_user)):
+    return {"people": await q_people.list_with_balances()}
+
+
+@app.post("/api/people", status_code=201)
+async def people_create(
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        person_id = await w_people.insert_person(
+            name=body.get("name", ""),
+            telegram_username=body.get("telegram_username"),
+            phone=body.get("phone"),
+            note=body.get("note"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    for p in await q_people.list_with_balances():
+        if p["id"] == person_id:
+            return p
+    raise HTTPException(status_code=500, detail="Person created but not retrievable")
+
+
+@app.put("/api/people/{person_id}")
+async def people_update(
+    person_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    fields = {k: body[k] for k in ("name", "telegram_username", "phone", "note") if k in body}
+    try:
+        ok = await w_people.update_person(person_id, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {"ok": True, "id": person_id}
+
+
+@app.delete("/api/people/{person_id}", status_code=204)
+async def people_delete(
+    person_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    ok = await w_people.soft_delete(person_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Person not found or already deleted")
+    return Response(status_code=204)
+
+
+@app.get("/api/people/{person_id}/debts")
+async def people_debts(
+    person_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    return {"debts": await q_debts.list_for_person(person_id)}
+
+
+@app.get("/api/debts")
+async def debts_list(user_id: int = Depends(auth.get_current_user)):
+    return {"debts": await q_debts.list_open()}
+
+
+@app.get("/api/debts/{debt_id}")
+async def debts_detail(
+    debt_id: int,
+    user_id: int = Depends(auth.get_current_user),
+):
+    detail = await q_debts.get(debt_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Debt not found")
+    detail["payments"] = await q_debts.payments_for(debt_id)
+    return detail
+
+
+@app.post("/api/debts", status_code=201)
+async def debts_create(
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        debt_id = await w_debts.insert_debt(
+            person_id=body.get("person_id"),
+            direction=body.get("direction"),
+            amount_cents=int(body.get("amount_cents", 0)),
+            wallet_id=body.get("wallet_id"),
+            opened_at=body.get("opened_at"),
+            due_at=body.get("due_at"),
+            note=body.get("note"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": debt_id, "debt": await q_debts.get(debt_id)}
+
+
+@app.post("/api/debts/{debt_id}/repay", status_code=201)
+async def debts_repay(
+    debt_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        tx_id = await w_debts.repay(
+            debt_id=debt_id,
+            amount_cents=int(body.get("amount_cents", 0)),
+            wallet_id=body.get("wallet_id"),
+            occurred_at=body.get("occurred_at"),
+            note=body.get("note"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"tx_id": tx_id, "debt": await q_debts.get(debt_id)}
+
+
+@app.post("/api/debts/{debt_id}/forgive", status_code=201)
+async def debts_forgive(
+    debt_id: int,
+    request: Request,
+    user_id: int = Depends(auth.get_current_user),
+):
+    rate_limit("write", user_id, max_per_minute=30)
+    body = await request.json()
+    try:
+        tx_id = await w_debts.forgive(
+            debt_id=debt_id,
+            note=body.get("note"),
+            forgive_category_id=body.get("forgive_category_id"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"tx_id": tx_id, "debt": await q_debts.get(debt_id)}
 
 
 # ---------- W11: language toggle ----------

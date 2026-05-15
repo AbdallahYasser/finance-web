@@ -62,7 +62,7 @@ async def list_with_balances() -> list[dict]:
 
 
 async def net_worth_cents() -> int:
-    """Sum of liquid balances + gold valuation."""
+    """Sum of liquid balances + gold valuation + receivables − payables (W7)."""
     total = 0
     for w in await list_with_balances():
         if w["type"] in ("cash", "bank", "e_wallet"):
@@ -71,4 +71,13 @@ async def net_worth_cents() -> int:
             grams_mg = w.get("gold_grams_milligrams") or 0
             price_cents = w.get("gold_price_per_gram_cents") or 0
             total += (grams_mg * price_cents) // 1000
+
+    # W7: receivables (+) and payables (−). Skip silently if the debts
+    # table hasn't been created yet (e.g. fresh deploy before migrations).
+    try:
+        from src.queries import people as q_people
+        total += await q_people.net_receivables_cents()
+        total -= await q_people.net_payables_cents()
+    except Exception:
+        pass
     return total

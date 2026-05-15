@@ -119,6 +119,7 @@ async def w4_db(monkeypatch):
                 amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
                 source_wallet_id INTEGER, dest_wallet_id INTEGER,
                 category_id INTEGER, item_id INTEGER, place_id INTEGER,
+                person_id INTEGER, debt_id INTEGER,
                 refund_of_id INTEGER, occurred_at TEXT NOT NULL,
                 note TEXT,
                 source TEXT NOT NULL DEFAULT 'manual'
