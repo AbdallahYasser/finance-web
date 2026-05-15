@@ -30,17 +30,19 @@
       <span class="header-icon">💰</span>
       <span class="header-title">Finance Tracker</span>
       <nav class="header-nav">
-        <a href="#dashboard"    class="nav-link" data-route="dashboard">Dashboard</a>
-        <a href="#transactions" class="nav-link" data-route="transactions">Transactions</a>
-        <a href="#items"        class="nav-link" data-route="items">Items</a>
-        <a href="#places"       class="nav-link" data-route="places">Places</a>
+        <a href="#dashboard"    class="nav-link" data-route="dashboard"    data-i18n="nav.dashboard">Dashboard</a>
+        <a href="#transactions" class="nav-link" data-route="transactions" data-i18n="nav.transactions">Transactions</a>
+        <a href="#wallets"      class="nav-link" data-route="wallets"      data-i18n="nav.wallets">Wallets</a>
+        <a href="#items"        class="nav-link" data-route="items"        data-i18n="nav.items">Items</a>
+        <a href="#places"       class="nav-link" data-route="places"       data-i18n="nav.places">Places</a>
       </nav>
     </div>
     <div class="header-right">
-      <button id="add-tx-btn" class="btn-primary" onclick="openTxForm()" title="Add transaction">+ Add</button>
+      <button id="add-tx-btn" class="btn-primary" onclick="openTxForm()" title="Add transaction"><span data-i18n="action.add">+ Add</span></button>
       <button id="refresh-btn" onclick="refreshCurrent()" title="Refresh">🔄</button>
+      <button id="lang-btn" class="lang-pill" onclick="toggleLang()" title="Toggle language">عربي</button>
       <div class="user-info"><span id="user-name"></span></div>
-      <button id="logout-btn" onclick="logout()">Logout</button>
+      <button id="logout-btn" onclick="logout()" data-i18n="action.logout">Logout</button>
     </div>
   </header>
 
@@ -110,12 +112,13 @@
       <div class="tx-table-meta">
         <span id="tx-total" class="muted small">—</span>
         <div class="meta-right">
+          <button onclick="downloadCSV()" title="Download CSV">⬇ CSV</button>
           <label class="checkbox-label muted small">
             <input type="checkbox" id="f-show-deleted" onchange="applyFilters()" />
-            Show deleted
+            <span data-i18n="filter.show_deleted">Show deleted</span>
           </label>
           <span class="muted small">
-            Page size:
+            <span data-i18n="filter.page_size">Page size</span>:
             <select id="f-page-size" onchange="applyFilters()">
               <option value="25">25</option>
               <option value="50" selected>50</option>
@@ -148,13 +151,24 @@
   <main id="page-places" class="content page hidden">
     <section class="card">
       <h3>
-        <span>Places</span>
+        <span data-i18n="page.places.title">Places</span>
         <span class="muted small" id="places-meta">—</span>
       </h3>
       <p class="muted small" style="margin-bottom:16px;">
         Click any row to see top items bought there + recent transactions.
       </p>
       <div id="places-table-wrap"><div class="muted small">Loading…</div></div>
+    </section>
+  </main>
+
+  <!-- ========= Wallets (W5) ========= -->
+  <main id="page-wallets" class="content page hidden">
+    <section class="card">
+      <h3 style="display:flex; justify-content:space-between; align-items:center;">
+        <span data-i18n="page.wallets.title">Wallets</span>
+        <button class="btn-primary" onclick="openWalletForm()"><span data-i18n="action.new_wallet">+ New wallet</span></button>
+      </h3>
+      <div id="wallets-page-list" class="kv-list"><div class="muted small">Loading…</div></div>
     </section>
   </main>
 
@@ -275,6 +289,138 @@
       <div class="modal-actions">
         <button type="button" onclick="closeTxForm()">Cancel</button>
         <button type="submit" class="btn-primary" id="tx-form-save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Wallet modal (W5) ========= -->
+<div id="wallet-modal" class="modal-overlay hidden" onclick="onWalletModalBgClick(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="wallet-modal-title">New wallet</h2>
+      <button class="modal-close" onclick="closeWalletForm()" title="Close">✕</button>
+    </div>
+    <form id="wallet-form" onsubmit="event.preventDefault(); saveWalletForm();" class="tx-form">
+      <input type="hidden" id="wallet-id" />
+      <div class="form-row">
+        <label>Type</label>
+        <div class="radio-row">
+          <label class="radio"><input type="radio" name="wallet-type" value="cash" checked onchange="onWalletTypeChange()"> 💵 Cash</label>
+          <label class="radio"><input type="radio" name="wallet-type" value="bank" onchange="onWalletTypeChange()"> 🏦 Bank</label>
+          <label class="radio"><input type="radio" name="wallet-type" value="e_wallet" onchange="onWalletTypeChange()"> 📱 E-wallet</label>
+          <label class="radio"><input type="radio" name="wallet-type" value="asset_gold" onchange="onWalletTypeChange()"> 🥇 Gold</label>
+        </div>
+      </div>
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="wallet-name-en">Name (English)</label>
+          <input type="text" id="wallet-name-en" maxlength="80" placeholder="e.g. Bank (CIB)" />
+        </div>
+        <div class="form-field">
+          <label for="wallet-name-ar">Name (Arabic)</label>
+          <input type="text" id="wallet-name-ar" maxlength="80" placeholder="بنك (CIB)" />
+        </div>
+      </div>
+      <div class="form-row" id="wallet-initial-field">
+        <label for="wallet-initial">Initial balance (EGP)</label>
+        <input type="text" id="wallet-initial" placeholder="0" inputmode="decimal" />
+      </div>
+      <div id="wallet-gold-fields" class="form-row hidden" style="flex-direction:column;gap:12px;">
+        <div class="form-row-split form-row">
+          <div class="form-field">
+            <label for="wallet-karat">Karat</label>
+            <select id="wallet-karat">
+              <option value="">— pick —</option>
+              <option value="18">18k</option>
+              <option value="21">21k</option>
+              <option value="24">24k</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="wallet-grams">Grams</label>
+            <input type="text" id="wallet-grams" inputmode="decimal" placeholder="e.g. 10" />
+          </div>
+          <div class="form-field">
+            <label for="wallet-price">EGP/gram</label>
+            <input type="text" id="wallet-price" inputmode="decimal" placeholder="e.g. 4000" />
+          </div>
+        </div>
+      </div>
+      <div class="form-error" id="wallet-form-error"></div>
+      <div class="modal-actions">
+        <button type="button" onclick="closeWalletForm()" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn-primary" id="wallet-form-save" data-i18n="action.save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Place edit modal (W5) ========= -->
+<div id="place-modal" class="modal-overlay hidden" onclick="onPlaceModalBgClick(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="place-modal-title">Edit place</h2>
+      <button class="modal-close" onclick="closePlaceForm()" title="Close">✕</button>
+    </div>
+    <form id="place-form" onsubmit="event.preventDefault(); savePlaceForm();" class="tx-form">
+      <input type="hidden" id="place-edit-id" />
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="place-edit-branch">Branch name</label>
+          <input type="text" id="place-edit-branch" maxlength="80" />
+        </div>
+        <div class="form-field">
+          <label for="place-edit-chain">Chain (optional)</label>
+          <input type="text" id="place-edit-chain" maxlength="80" />
+        </div>
+      </div>
+      <div class="form-error" id="place-form-error"></div>
+      <div class="modal-actions">
+        <button type="button" onclick="closePlaceForm()" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn-primary" data-i18n="action.save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========= Item edit modal (W5) ========= -->
+<div id="item-modal" class="modal-overlay hidden" onclick="onItemModalBgClick(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="item-modal-title">Edit item</h2>
+      <button class="modal-close" onclick="closeItemForm()" title="Close">✕</button>
+    </div>
+    <form id="item-form" onsubmit="event.preventDefault(); saveItemForm();" class="tx-form">
+      <input type="hidden" id="item-edit-id" />
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="item-edit-name-en">Name (English)</label>
+          <input type="text" id="item-edit-name-en" maxlength="80" />
+        </div>
+        <div class="form-field">
+          <label for="item-edit-name-ar">Name (Arabic)</label>
+          <input type="text" id="item-edit-name-ar" maxlength="80" />
+        </div>
+      </div>
+      <div class="form-row form-row-split">
+        <div class="form-field">
+          <label for="item-edit-size">Size</label>
+          <input type="text" id="item-edit-size" maxlength="30" />
+        </div>
+        <div class="form-field">
+          <label for="item-edit-unit">Unit</label>
+          <input type="text" id="item-edit-unit" maxlength="30" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="item-edit-category">Default category</label>
+        <select id="item-edit-category"></select>
+      </div>
+      <div class="form-error" id="item-form-error"></div>
+      <div class="modal-actions">
+        <button type="button" onclick="closeItemForm()" data-i18n="action.cancel">Cancel</button>
+        <button type="submit" class="btn-primary" data-i18n="action.save">Save</button>
       </div>
     </form>
   </div>

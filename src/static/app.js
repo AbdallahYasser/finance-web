@@ -13,6 +13,86 @@ const CHART_PALETTE = [
   '#a78bfa', '#ec4899', '#14b8a6', '#84cc16',
 ];
 
+// ---------- i18n (W11) ----------
+
+const I18N = {
+  en: {
+    'nav.dashboard':    'Dashboard',
+    'nav.transactions': 'Transactions',
+    'nav.wallets':      'Wallets',
+    'nav.items':        'Items',
+    'nav.places':       'Places',
+    'action.add':       '+ Add',
+    'action.logout':    'Logout',
+    'action.cancel':    'Cancel',
+    'action.save':      'Save',
+    'action.new_wallet':'+ New wallet',
+    'action.edit':      '✏️ Edit',
+    'action.delete':    '🗑 Delete',
+    'action.restore':   '♻ Restore',
+    'page.places.title':'Places',
+    'page.wallets.title':'Wallets',
+    'filter.show_deleted':'Show deleted',
+    'filter.page_size': 'Page size',
+  },
+  ar: {
+    'nav.dashboard':    'الرئيسية',
+    'nav.transactions': 'العمليات',
+    'nav.wallets':      'المحافظ',
+    'nav.items':        'الأصناف',
+    'nav.places':       'الأماكن',
+    'action.add':       '+ إضافة',
+    'action.logout':    'خروج',
+    'action.cancel':    'إلغاء',
+    'action.save':      'حفظ',
+    'action.new_wallet':'+ محفظة جديدة',
+    'action.edit':      '✏️ تعديل',
+    'action.delete':    '🗑 حذف',
+    'action.restore':   '♻ استرجاع',
+    'page.places.title':'الأماكن',
+    'page.wallets.title':'المحافظ',
+    'filter.show_deleted':'إظهار المحذوف',
+    'filter.page_size': 'حجم الصفحة',
+  },
+};
+
+let CURRENT_LANG = 'en';
+
+function t(key) {
+  return (I18N[CURRENT_LANG] && I18N[CURRENT_LANG][key]) || (I18N.en && I18N.en[key]) || key;
+}
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    el.textContent = t(key);
+  });
+  document.documentElement.lang = CURRENT_LANG;
+  document.documentElement.dir = (CURRENT_LANG === 'ar') ? 'rtl' : 'ltr';
+  const pill = document.getElementById('lang-btn');
+  if (pill) pill.textContent = (CURRENT_LANG === 'ar') ? 'EN' : 'عربي';
+}
+
+function setLang(code) {
+  if (!I18N[code]) code = 'en';
+  CURRENT_LANG = code;
+  applyI18n();
+}
+
+async function toggleLang() {
+  const next = (CURRENT_LANG === 'ar') ? 'en' : 'ar';
+  try {
+    await fetchJSON('/api/me/language', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: next }),
+    });
+    setLang(next);
+  } catch (e) {
+    alert('Could not change language: ' + (e.message || ''));
+  }
+}
+
 // ---------- Generic helpers ----------
 
 function $(id) { return document.getElementById(id); }
@@ -229,7 +309,7 @@ async function logout() {
 // ---------- Routing ----------
 
 let currentRoute = 'dashboard';
-const ROUTES = ['dashboard', 'transactions', 'items', 'places'];
+const ROUTES = ['dashboard', 'transactions', 'wallets', 'items', 'places'];
 
 function setRoute(route) {
   currentRoute = route;
@@ -250,6 +330,7 @@ function onHashChange() {
 function refreshCurrent() {
   if (currentRoute === 'dashboard')    return loadDashboard();
   if (currentRoute === 'transactions') return loadTransactions();
+  if (currentRoute === 'wallets')      return loadWalletsPage();
   if (currentRoute === 'items')        return loadItems();
   if (currentRoute === 'places')       return loadPlaces();
 }
@@ -1022,8 +1103,28 @@ async function populateItemDetail(id) {
     <div class="chart-wrap"><canvas id="item-chart-${id}"></canvas></div>
   ` : '<div class="muted small" style="margin-top:12px;">No price observations yet.</div>';
 
-  body.innerHTML = summaryHtml + chartHtml + placesHtml;
+  const aliasesHtml = `
+    <h4 class="detail-section-title">Aliases</h4>
+    <div class="aliases-wrap" id="item-aliases-${id}">
+      <div id="alias-chips-${id}" class="alias-chips"><span class="muted small">Loading…</span></div>
+      <div class="alias-input-row">
+        <input type="text" id="alias-input-${id}" placeholder="Add alias…" maxlength="80"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();addAlias(${id});}" />
+        <button class="btn-primary" onclick="addAlias(${id})">Add</button>
+      </div>
+    </div>
+  `;
+
+  const actionsHtml = `
+    <div class="detail-actions">
+      <button onclick="openItemForm(${id})">✏️ Edit</button>
+      <button class="btn-danger" onclick="confirmDeleteItem(${id})">🗑 Delete</button>
+    </div>
+  `;
+
+  body.innerHTML = summaryHtml + chartHtml + placesHtml + aliasesHtml + actionsHtml;
   if (places.length > 0) drawItemChart(id, places);
+  loadAliasChips(id);
 }
 
 function drawItemChart(id, places) {
@@ -1189,7 +1290,412 @@ async function populatePlaceDetail(id) {
       }).join('')}
     </div>
   `;
-  body.innerHTML = summaryHtml + topItemsHtml + recentHtml;
+  const placeActions = `
+    <div class="detail-actions">
+      <button onclick="openPlaceForm(${id})">✏️ Edit</button>
+      <button class="btn-danger" onclick="confirmDeletePlace(${id})">🗑 Delete</button>
+    </div>
+  `;
+  body.innerHTML = summaryHtml + topItemsHtml + recentHtml + placeActions;
+}
+
+// ---------- Wallets page (W5) ----------
+
+async function loadWalletsPage() {
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  const root = $('wallets-page-list');
+  root.innerHTML = '<div class="muted small" style="padding:24px 0;text-align:center;">Loading…</div>';
+  try {
+    const data = await fetchJSON('/api/dashboard'); // reuses wallet+balance composite
+    renderWalletsPage(data.wallets || []);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
+    root.innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message || 'unknown')}</div>`;
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function renderWalletsPage(wallets) {
+  const root = $('wallets-page-list');
+  if (!wallets || wallets.length === 0) {
+    root.innerHTML = '<div class="muted small">No wallets yet. Tap <b>+ New wallet</b>.</div>';
+    return;
+  }
+  root.innerHTML = wallets.map(w => {
+    const icon = TYPE_ICONS[w.type] || '•';
+    const name = w.name_en || w.name_ar || `Wallet ${w.id}`;
+    const balCls = w.balance_cents < 0 ? 'wallet-balance negative' : 'wallet-balance';
+    let meta = `${w.type}`;
+    if (w.type === 'asset_gold') {
+      const grams = (w.gold_grams_milligrams || 0) / 1000;
+      const karat = w.karat || '?';
+      const price = w.gold_price_per_gram_cents
+        ? (w.gold_price_per_gram_cents / 100).toLocaleString('en-US')
+        : '?';
+      meta = `${karat}k · ${grams} g · ${price} EGP/g`;
+    }
+    return `<div class="wallet-row">
+      <div class="wallet-name">
+        <span class="wallet-icon">${icon}</span>
+        <span>
+          <div>${escapeHtml(name)}</div>
+          <div class="wallet-meta">${escapeHtml(meta)}</div>
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="${balCls}">${fmtAmount(w.balance_cents)}</div>
+        <div class="wallet-actions">
+          <button onclick="openWalletForm(${w.id})" title="${t('action.edit')}">✏️</button>
+          <button class="btn-danger" onclick="confirmDeleteWallet(${w.id})" title="${t('action.delete')}">🗑</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+let WALLET_FORM_MODE = 'create';
+
+async function openWalletForm(walletId = null) {
+  await ensureLookups();
+  $('wallet-form-error').textContent = '';
+  if (walletId == null) {
+    WALLET_FORM_MODE = 'create';
+    $('wallet-modal-title').textContent = 'New wallet';
+    $('wallet-id').value = '';
+    document.querySelector('input[name="wallet-type"][value="cash"]').checked = true;
+    $('wallet-name-en').value = '';
+    $('wallet-name-ar').value = '';
+    $('wallet-initial').value = '0';
+    $('wallet-karat').value = '';
+    $('wallet-grams').value = '';
+    $('wallet-price').value = '';
+  } else {
+    WALLET_FORM_MODE = 'edit';
+    const w = (LOOKUPS.wallets || []).find(x => x.id === walletId);
+    // Fetch full wallet data including gold fields from dashboard
+    const data = await fetchJSON('/api/dashboard');
+    const full = (data.wallets || []).find(x => x.id === walletId) || w || {};
+    $('wallet-modal-title').textContent = `Edit ${full.name_en || full.name_ar || 'wallet'}`;
+    $('wallet-id').value = walletId;
+    const typeRadio = document.querySelector(`input[name="wallet-type"][value="${full.type}"]`);
+    if (typeRadio) typeRadio.checked = true;
+    $('wallet-name-en').value = full.name_en || '';
+    $('wallet-name-ar').value = full.name_ar || '';
+    // Can't directly edit initial_balance through UI in edit mode safely — show but allow
+    $('wallet-initial').value = ((full.initial_balance_cents || 0) / 100).toFixed(2);
+    $('wallet-karat').value = full.karat || '';
+    $('wallet-grams').value = full.gold_grams_milligrams != null
+      ? (full.gold_grams_milligrams / 1000).toString() : '';
+    $('wallet-price').value = full.gold_price_per_gram_cents != null
+      ? (full.gold_price_per_gram_cents / 100).toString() : '';
+  }
+  onWalletTypeChange();
+  // In edit mode, disable the type radios — type isn't editable.
+  document.querySelectorAll('input[name="wallet-type"]').forEach(r => {
+    r.disabled = (WALLET_FORM_MODE === 'edit');
+  });
+  $('wallet-modal').classList.remove('hidden');
+}
+
+function closeWalletForm() { $('wallet-modal').classList.add('hidden'); }
+function onWalletModalBgClick(e) {
+  if (e.target.id === 'wallet-modal') closeWalletForm();
+}
+
+function onWalletTypeChange() {
+  const t = document.querySelector('input[name="wallet-type"]:checked').value;
+  $('wallet-gold-fields').classList.toggle('hidden', t !== 'asset_gold');
+}
+
+async function saveWalletForm() {
+  const err = $('wallet-form-error');
+  err.textContent = '';
+  const type = document.querySelector('input[name="wallet-type"]:checked').value;
+  const nameEn = $('wallet-name-en').value.trim();
+  const nameAr = $('wallet-name-ar').value.trim();
+  if (!nameEn && !nameAr) {
+    err.textContent = 'Provide at least one name (English or Arabic).';
+    return;
+  }
+  let initial = 0;
+  try { initial = parseAmountToCents($('wallet-initial').value || '0'); }
+  catch (e) { err.textContent = 'Initial balance: ' + e.message; return; }
+
+  const body = {
+    name_en: nameEn || null,
+    name_ar: nameAr || null,
+    initial_balance_cents: initial,
+  };
+  if (WALLET_FORM_MODE === 'create') body.type = type;
+
+  if (type === 'asset_gold') {
+    const karat = parseInt($('wallet-karat').value, 10);
+    if (![18, 21, 24].includes(karat)) {
+      err.textContent = 'Karat must be 18, 21 or 24.'; return;
+    }
+    body.karat = karat;
+    const gramsStr = $('wallet-grams').value.trim();
+    if (gramsStr) {
+      const grams = parseFloat(gramsStr);
+      if (isNaN(grams) || grams < 0) { err.textContent = 'Grams must be ≥ 0.'; return; }
+      body.gold_grams_milligrams = Math.round(grams * 1000);
+    }
+    const priceStr = $('wallet-price').value.trim();
+    if (priceStr) {
+      try { body.gold_price_per_gram_cents = parseAmountToCents(priceStr); }
+      catch (e) { err.textContent = 'Price: ' + e.message; return; }
+    }
+  }
+
+  try {
+    if (WALLET_FORM_MODE === 'create') {
+      await fetchJSON('/api/wallets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Wallet created', 'success');
+    } else {
+      const id = parseInt($('wallet-id').value, 10);
+      await fetchJSON(`/api/wallets/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Wallet updated', 'success');
+    }
+    closeWalletForm();
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    err.textContent = e.message || 'save failed';
+  }
+}
+
+async function confirmDeleteWallet(id) {
+  const ok = await openConfirm(
+    'Delete wallet?',
+    'The wallet will be hidden. Existing transactions linked to it stay intact.',
+    'Delete',
+  );
+  if (!ok) return;
+  try {
+    await fetchJSON(`/api/wallets/${id}`, { method: 'DELETE' });
+    toast('Wallet deleted', 'success');
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || ''), 'error');
+  }
+}
+
+// ---------- Place edit (W5) ----------
+
+async function openPlaceForm(placeId) {
+  const p = (LOOKUPS.places || []).find(x => x.id === placeId);
+  if (!p) return;
+  $('place-form-error').textContent = '';
+  $('place-modal-title').textContent = `Edit ${p.branch_name || 'place'}`;
+  $('place-edit-id').value = placeId;
+  $('place-edit-branch').value = p.branch_name || '';
+  $('place-edit-chain').value = p.chain_name || '';
+  $('place-modal').classList.remove('hidden');
+}
+
+function closePlaceForm() { $('place-modal').classList.add('hidden'); }
+function onPlaceModalBgClick(e) {
+  if (e.target.id === 'place-modal') closePlaceForm();
+}
+
+async function savePlaceForm() {
+  const err = $('place-form-error');
+  err.textContent = '';
+  const id = parseInt($('place-edit-id').value, 10);
+  const branch = $('place-edit-branch').value.trim();
+  const chain = $('place-edit-chain').value.trim();
+  if (!branch) { err.textContent = 'Branch name is required.'; return; }
+  try {
+    await fetchJSON(`/api/places/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch_name: branch, chain_name: chain || null }),
+    });
+    toast('Place updated', 'success');
+    closePlaceForm();
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    err.textContent = e.message || 'save failed';
+  }
+}
+
+async function confirmDeletePlace(id) {
+  const ok = await openConfirm(
+    'Delete place?',
+    'The place will be hidden. Existing transactions linked to it stay intact.',
+    'Delete',
+  );
+  if (!ok) return;
+  try {
+    await fetchJSON(`/api/places/${id}`, { method: 'DELETE' });
+    toast('Place deleted', 'success');
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || ''), 'error');
+  }
+}
+
+// ---------- Item edit + aliases (W5) ----------
+
+async function openItemForm(itemId) {
+  await ensureLookups();
+  const it = (LOOKUPS.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  $('item-form-error').textContent = '';
+  $('item-modal-title').textContent = `Edit ${it.canonical_name_en || it.canonical_name_ar || 'item'}`;
+  $('item-edit-id').value = itemId;
+  $('item-edit-name-en').value = it.canonical_name_en || '';
+  $('item-edit-name-ar').value = it.canonical_name_ar || '';
+  $('item-edit-size').value = it.size || '';
+  $('item-edit-unit').value = it.unit || '';
+
+  // Populate categories dropdown
+  const cats = (LOOKUPS.categories || []);
+  let opts = '<option value="">— None —</option>';
+  const parents = cats.filter(c => c.parent_id == null);
+  const childrenByParent = {};
+  cats.filter(c => c.parent_id != null).forEach(c => {
+    (childrenByParent[c.parent_id] = childrenByParent[c.parent_id] || []).push(c);
+  });
+  for (const p of parents) {
+    opts += `<option value="${p.id}">${p.icon || '•'} ${escapeHtml(p.name_en || p.name_ar)}</option>`;
+    for (const ch of (childrenByParent[p.id] || [])) {
+      opts += `<option value="${ch.id}">  ↳ ${ch.icon || '·'} ${escapeHtml(ch.name_en || ch.name_ar)}</option>`;
+    }
+  }
+  $('item-edit-category').innerHTML = opts;
+  // Note: we don't store default_category_id in lookups currently — leave default
+
+  $('item-modal').classList.remove('hidden');
+}
+
+function closeItemForm() { $('item-modal').classList.add('hidden'); }
+function onItemModalBgClick(e) {
+  if (e.target.id === 'item-modal') closeItemForm();
+}
+
+async function saveItemForm() {
+  const err = $('item-form-error');
+  err.textContent = '';
+  const id = parseInt($('item-edit-id').value, 10);
+  const nameEn = $('item-edit-name-en').value.trim();
+  const nameAr = $('item-edit-name-ar').value.trim();
+  if (!nameEn && !nameAr) {
+    err.textContent = 'Provide at least one name.'; return;
+  }
+  const body = {
+    canonical_name_en: nameEn || null,
+    canonical_name_ar: nameAr || null,
+    size: $('item-edit-size').value.trim() || null,
+    unit: $('item-edit-unit').value.trim() || null,
+    default_category_id: parseInt($('item-edit-category').value, 10) || null,
+  };
+  try {
+    await fetchJSON(`/api/items/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast('Item updated', 'success');
+    closeItemForm();
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    err.textContent = e.message || 'save failed';
+  }
+}
+
+async function confirmDeleteItem(id) {
+  const ok = await openConfirm(
+    'Delete item?',
+    'The item will be hidden. Price-history and existing transactions stay intact.',
+    'Delete',
+  );
+  if (!ok) return;
+  try {
+    await fetchJSON(`/api/items/${id}`, { method: 'DELETE' });
+    toast('Item deleted', 'success');
+    await ensureLookups(true);
+    refreshCurrent();
+  } catch (e) {
+    toast('Delete failed: ' + (e.message || ''), 'error');
+  }
+}
+
+async function loadAliasChips(itemId) {
+  const container = $(`item-aliases-${itemId}`);
+  if (!container) return;
+  try {
+    const data = await fetchJSON(`/api/items/${itemId}/aliases`);
+    renderAliasChips(itemId, data.aliases || []);
+  } catch (e) {
+    container.innerHTML = `<div class="muted small">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderAliasChips(itemId, aliases) {
+  const chipsRoot = $(`alias-chips-${itemId}`);
+  if (!chipsRoot) return;
+  if (aliases.length === 0) {
+    chipsRoot.innerHTML = '<span class="muted small">No aliases yet.</span>';
+    return;
+  }
+  chipsRoot.innerHTML = aliases.map(a => `
+    <span class="alias-chip">
+      ${escapeHtml(a.alias_text)}
+      <button onclick="removeAlias(${itemId}, ${a.id})" title="Remove">×</button>
+    </span>
+  `).join('');
+}
+
+async function addAlias(itemId) {
+  const input = $(`alias-input-${itemId}`);
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    await fetchJSON(`/api/items/${itemId}/aliases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias_text: text }),
+    });
+    input.value = '';
+    await loadAliasChips(itemId);
+  } catch (e) {
+    toast('Add alias failed: ' + (e.message || ''), 'error');
+  }
+}
+
+async function removeAlias(itemId, aliasId) {
+  try {
+    await fetchJSON(`/api/aliases/${aliasId}`, { method: 'DELETE' });
+    await loadAliasChips(itemId);
+  } catch (e) {
+    toast('Remove alias failed: ' + (e.message || ''), 'error');
+  }
+}
+
+// ---------- CSV export (W12) ----------
+
+function downloadCSV() {
+  const filters = readFilters();
+  // Drop pagination params for export
+  delete filters.page; delete filters.page_size;
+  const url = '/api/transactions/export.csv?' + buildQuery(filters);
+  // Native browser download — opens the URL which has Content-Disposition attachment
+  window.location.href = url;
 }
 
 // ---------- Init ----------
@@ -1201,6 +1707,7 @@ async function init() {
   try {
     ME = await fetchJSON('/api/me');
     renderHeader(ME);
+    setLang(ME.language || 'en');
     show('app');
     onHashChange();
     window.addEventListener('hashchange', () => {
@@ -1240,4 +1747,25 @@ window.saveTxForm = saveTxForm;
 window.confirmDeleteTx = confirmDeleteTx;
 window.restoreTx = restoreTx;
 window.closeConfirm = closeConfirm;
+// W5 / W11 / W12
+window.toggleLang = toggleLang;
+window.openWalletForm = openWalletForm;
+window.closeWalletForm = closeWalletForm;
+window.onWalletModalBgClick = onWalletModalBgClick;
+window.onWalletTypeChange = onWalletTypeChange;
+window.saveWalletForm = saveWalletForm;
+window.confirmDeleteWallet = confirmDeleteWallet;
+window.openPlaceForm = openPlaceForm;
+window.closePlaceForm = closePlaceForm;
+window.onPlaceModalBgClick = onPlaceModalBgClick;
+window.savePlaceForm = savePlaceForm;
+window.confirmDeletePlace = confirmDeletePlace;
+window.openItemForm = openItemForm;
+window.closeItemForm = closeItemForm;
+window.onItemModalBgClick = onItemModalBgClick;
+window.saveItemForm = saveItemForm;
+window.confirmDeleteItem = confirmDeleteItem;
+window.addAlias = addAlias;
+window.removeAlias = removeAlias;
+window.downloadCSV = downloadCSV;
 window.addEventListener('DOMContentLoaded', init);

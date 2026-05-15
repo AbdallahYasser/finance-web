@@ -646,6 +646,78 @@ footer {
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* ---------- Wallets page (W5) ---------- */
+
+.wallet-row .wallet-actions {
+  display: flex;
+  gap: 8px;
+}
+.wallet-row .wallet-actions button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.wallet-row { padding: 12px 0; }
+.wallet-row .wallet-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* ---------- Alias chips (W5) ---------- */
+
+.aliases-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.alias-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px 4px 12px;
+  font-size: 13px;
+}
+.alias-chip button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.alias-chip button:hover { color: var(--danger); }
+.alias-input-row {
+  display: flex;
+  gap: 8px;
+}
+.alias-input-row input { flex: 1; }
+
+/* ---------- Language pill (W11) ---------- */
+
+.lang-pill {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+.lang-pill:hover { background: var(--border); }
+
+/* RTL nudges (W11) */
+[dir="rtl"] .header-right { flex-direction: row-reverse; }
+[dir="rtl"] .toasts { left: 20px; right: auto; }
+[dir="rtl"] .pagination button[title="First"] { transform: scaleX(-1); }
+[dir="rtl"] .pagination button[title="Last"] { transform: scaleX(-1); }
+
 @media (max-width: 600px) {
   .content { padding: 16px; }
   .card { padding: 16px; }
