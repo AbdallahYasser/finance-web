@@ -34,6 +34,7 @@
         <a href="#transactions" class="nav-link" data-route="transactions" data-i18n="nav.transactions">Transactions</a>
         <a href="#wallets"      class="nav-link" data-route="wallets"      data-i18n="nav.wallets">Wallets</a>
         <a href="#debts"        class="nav-link" data-route="debts"        data-i18n="nav.debts">Debts</a>
+        <a href="#reports"      class="nav-link" data-route="reports"      data-i18n="nav.reports">Reports</a>
         <a href="#items"        class="nav-link" data-route="items"        data-i18n="nav.items">Items</a>
         <a href="#places"       class="nav-link" data-route="places"       data-i18n="nav.places">Places</a>
       </nav>
@@ -160,6 +161,44 @@
       </p>
       <div id="places-table-wrap"><div class="muted small">Loading…</div></div>
     </section>
+  </main>
+
+  <!-- ========= Reports (W8) ========= -->
+  <main id="page-reports" class="content page hidden">
+    <section class="card net-worth-card">
+      <div class="net-worth-label" data-i18n="reports.free_to_spend">Free to spend per day</div>
+      <div class="net-worth-value" id="rep-per-day">—</div>
+      <div class="net-worth-sub muted small" id="rep-fts-sub">—</div>
+    </section>
+
+    <div class="grid-two">
+      <section class="card">
+        <h3 data-i18n="reports.this_month">This month</h3>
+        <div id="rep-this-month-tiles" class="entity-summary" style="grid-template-columns: repeat(3, 1fr);">
+          <div class="muted small">Loading…</div>
+        </div>
+      </section>
+      <section class="card">
+        <h3 data-i18n="reports.savings_rate">Savings (last 6 months)</h3>
+        <div class="chart-wrap" style="height:200px;"><canvas id="rep-net-chart"></canvas></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h3 data-i18n="reports.category_trend">Spending by category — last 6 months</h3>
+      <div class="chart-wrap" style="height:320px;"><canvas id="rep-trend-chart"></canvas></div>
+    </section>
+
+    <div class="grid-two">
+      <section class="card">
+        <h3 data-i18n="reports.top_items">Top items (last 90 days)</h3>
+        <div id="rep-top-items"><div class="muted small">Loading…</div></div>
+      </section>
+      <section class="card">
+        <h3 data-i18n="reports.top_places">Top places (last 90 days)</h3>
+        <div id="rep-top-places"><div class="muted small">Loading…</div></div>
+      </section>
+    </div>
   </main>
 
   <!-- ========= Debts (W7) ========= -->

@@ -23,9 +23,16 @@ const I18N = {
     'nav.items':        'Items',
     'nav.places':       'Places',
     'nav.debts':        'Debts',
+    'nav.reports':      'Reports',
     'action.new_debt':  '+ New debt',
     'page.debts.title': 'Debts overview',
     'page.debts.people':'People',
+    'reports.free_to_spend': 'Free to spend per day',
+    'reports.this_month':    'This month',
+    'reports.savings_rate':  'Savings (last 6 months)',
+    'reports.category_trend':'Spending by category — last 6 months',
+    'reports.top_items':     'Top items (last 90 days)',
+    'reports.top_places':    'Top places (last 90 days)',
     'action.add':       '+ Add',
     'action.logout':    'Logout',
     'action.cancel':    'Cancel',
@@ -46,9 +53,16 @@ const I18N = {
     'nav.items':        'الأصناف',
     'nav.places':       'الأماكن',
     'nav.debts':        'الديون',
+    'nav.reports':      'التقارير',
     'action.new_debt':  '+ دين جديد',
     'page.debts.title': 'ملخص الديون',
     'page.debts.people':'الأشخاص',
+    'reports.free_to_spend': 'المتاح للصرف يوميًا',
+    'reports.this_month':    'هذا الشهر',
+    'reports.savings_rate':  'الادخار (آخر ٦ أشهر)',
+    'reports.category_trend':'الإنفاق حسب الفئة — آخر ٦ أشهر',
+    'reports.top_items':     'الأصناف الأكثر إنفاقًا (٩٠ يوم)',
+    'reports.top_places':    'الأماكن الأكثر إنفاقًا (٩٠ يوم)',
     'action.add':       '+ إضافة',
     'action.logout':    'خروج',
     'action.cancel':    'إلغاء',
@@ -317,7 +331,7 @@ async function logout() {
 // ---------- Routing ----------
 
 let currentRoute = 'dashboard';
-const ROUTES = ['dashboard', 'transactions', 'wallets', 'debts', 'items', 'places'];
+const ROUTES = ['dashboard', 'transactions', 'wallets', 'debts', 'reports', 'items', 'places'];
 
 function setRoute(route) {
   currentRoute = route;
@@ -340,6 +354,7 @@ function refreshCurrent() {
   if (currentRoute === 'transactions') return loadTransactions();
   if (currentRoute === 'wallets')      return loadWalletsPage();
   if (currentRoute === 'debts')        return loadDebts();
+  if (currentRoute === 'reports')      return loadReports();
   if (currentRoute === 'items')        return loadItems();
   if (currentRoute === 'places')       return loadPlaces();
 }
@@ -2000,6 +2015,194 @@ async function confirmForgiveDebt(debtId) {
   }
 }
 
+// ---------- Reports (W8) ----------
+
+const _repCharts = new Map();
+
+async function loadReports() {
+  const btn = $('refresh-btn');
+  btn.classList.add('spinning');
+  try {
+    const data = await fetchJSON('/api/reports');
+    renderFreeToSpend(data.free_to_spend);
+    renderThisMonthTiles(data.monthly);
+    renderNetChart(data.monthly);
+    renderTrendChart(data.category_trend);
+    renderTopItems(data.top_items);
+    renderTopPlaces(data.top_places);
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) { show('login-screen'); mountTelegramWidget(); return; }
+    toast('Failed to load reports: ' + (e.message || ''), 'error');
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+function renderFreeToSpend(fts) {
+  if (!fts) return;
+  $('rep-per-day').textContent = fmtAmount(fts.per_day_cents);
+  const dayWord = fts.days_until_salary === 1 ? 'day' : 'days';
+  const suffix = fts.salary_day_configured
+    ? `${fmtAmount(fts.liquid_cents)} liquid · ${fts.days_until_salary} ${dayWord} until ${fts.next_salary_date}`
+    : `${fmtAmount(fts.liquid_cents)} liquid · ${fts.days_until_salary} ${dayWord} left in month (set salary day for a sharper forecast)`;
+  $('rep-fts-sub').textContent = suffix;
+}
+
+function renderThisMonthTiles(monthly) {
+  if (!monthly || monthly.length === 0) {
+    $('rep-this-month-tiles').innerHTML = '<div class="muted small">No data yet.</div>';
+    return;
+  }
+  const current = monthly[monthly.length - 1];
+  const prev = monthly.length > 1 ? monthly[monthly.length - 2] : null;
+  const prevSpend = prev ? prev.spend_cents : 0;
+  const deltaPct = prevSpend > 0
+    ? Math.round(((current.spend_cents - prevSpend) / prevSpend) * 100)
+    : null;
+  const deltaLabel = deltaPct == null ? '' :
+    (deltaPct >= 0 ? `▲ ${deltaPct}%` : `▼ ${Math.abs(deltaPct)}%`);
+  const deltaColor = deltaPct == null ? 'var(--muted)' :
+    (deltaPct >= 0 ? 'var(--danger)' : 'var(--good)');
+
+  $('rep-this-month-tiles').innerHTML = `
+    <div class="kv-tile">
+      <span>Income</span><strong style="color:var(--good)">${fmtAmount(current.income_cents)}</strong>
+    </div>
+    <div class="kv-tile">
+      <span>Spend</span>
+      <strong style="color:var(--danger)">${fmtAmount(current.spend_cents)}</strong>
+      ${deltaLabel ? `<span class="muted small" style="color:${deltaColor}">${deltaLabel} vs last month</span>` : ''}
+    </div>
+    <div class="kv-tile">
+      <span>Net saved</span>
+      <strong style="color:${current.net_cents >= 0 ? 'var(--good)' : 'var(--danger)'}">${fmtAmount(current.net_cents)}</strong>
+    </div>
+  `;
+}
+
+function renderNetChart(monthly) {
+  if (!monthly || typeof Chart === 'undefined') return;
+  const canvas = $('rep-net-chart');
+  if (!canvas) return;
+  if (_repCharts.has('net')) { _repCharts.get('net').destroy(); _repCharts.delete('net'); }
+
+  const labels = monthly.map(m => m.month);
+  const netData = monthly.map(m => m.net_cents / 100);
+
+  const c = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Net saved (EGP)',
+        data: netData,
+        backgroundColor: netData.map(v => v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+        y: {
+          ticks: { color: '#94a3b8', callback: v => v.toLocaleString('en-US') },
+          grid: { color: '#334155' },
+        },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+  _repCharts.set('net', c);
+}
+
+function renderTrendChart(trend) {
+  if (!trend || typeof Chart === 'undefined') return;
+  const canvas = $('rep-trend-chart');
+  if (!canvas) return;
+  if (_repCharts.has('trend')) { _repCharts.get('trend').destroy(); _repCharts.delete('trend'); }
+
+  const labels = trend.months || [];
+  const cats = trend.categories || [];
+  const series = trend.series || {};
+
+  const top = cats.slice(0, 8);
+  const datasets = top.map((cat, i) => {
+    const color = CHART_PALETTE[i % CHART_PALETTE.length];
+    return {
+      label: `${cat.icon || '•'} ${cat.name}`,
+      data: (series[cat.name] || []).map(c => c / 100),
+      backgroundColor: color,
+      stack: 'spend',
+    };
+  });
+
+  const c = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true, ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+        y: {
+          stacked: true,
+          ticks: { color: '#94a3b8', callback: v => v.toLocaleString('en-US') + ' EGP' },
+          grid: { color: '#334155' },
+        },
+      },
+      plugins: {
+        legend: { labels: { color: '#e2e8f0', boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} EGP`,
+          },
+        },
+      },
+    },
+  });
+  _repCharts.set('trend', c);
+}
+
+function renderTopItems(items) {
+  const root = $('rep-top-items');
+  if (!items || items.length === 0) {
+    root.innerHTML = '<div class="muted small">No item-tagged spends in the last 90 days.</div>';
+    return;
+  }
+  const max = items[0].total_cents || 1;
+  root.innerHTML = items.map(it => {
+    const pct = Math.max(2, Math.round((it.total_cents / max) * 100));
+    let name = it.name_en || it.name_ar || `Item ${it.id}`;
+    if (it.size) name += ` (${it.size})`;
+    return `<div class="bar-row">
+      <div class="bar-meta">
+        <span class="bar-cat">${escapeHtml(name)} · <span class="muted small">${it.tx_count}×</span></span>
+        <span class="bar-amt">${fmtAmount(it.total_cents)}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+function renderTopPlaces(places) {
+  const root = $('rep-top-places');
+  if (!places || places.length === 0) {
+    root.innerHTML = '<div class="muted small">No place-tagged spends in the last 90 days.</div>';
+    return;
+  }
+  const max = places[0].total_cents || 1;
+  root.innerHTML = places.map(p => {
+    const pct = Math.max(2, Math.round((p.total_cents / max) * 100));
+    let label = p.branch_name || `Place ${p.id}`;
+    if (p.chain_name && p.chain_name !== p.branch_name) label += ` · ${p.chain_name}`;
+    return `<div class="bar-row">
+      <div class="bar-meta">
+        <span class="bar-cat">${escapeHtml(label)} · <span class="muted small">${p.tx_count}×</span></span>
+        <span class="bar-amt">${fmtAmount(p.total_cents)}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
 // ---------- CSV export (W12) ----------
 
 function downloadCSV() {
@@ -2095,4 +2298,5 @@ window.closeRepayForm = closeRepayForm;
 window.onRepayModalBgClick = onRepayModalBgClick;
 window.saveRepayForm = saveRepayForm;
 window.confirmForgiveDebt = confirmForgiveDebt;
+// W8 has no event handlers needing window exports (Chart.js + load functions only)
 window.addEventListener('DOMContentLoaded', init);

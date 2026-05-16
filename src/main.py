@@ -30,6 +30,7 @@ from src.writes import people as w_people
 from src.writes import debts as w_debts
 from src.queries import people as q_people
 from src.queries import debts as q_debts
+from src.queries import reports as q_reports
 from src.web_schema import apply_web_migrations
 
 logging.basicConfig(
@@ -593,6 +594,19 @@ async def debts_forgive(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"tx_id": tx_id, "debt": await q_debts.get(debt_id)}
+
+
+# ---------- W8: Reports + forecast ----------
+
+@app.get("/api/reports")
+async def reports(user_id: int = Depends(auth.get_current_user)):
+    return {
+        "monthly":        await q_reports.monthly_summary(months_back=6),
+        "category_trend": await q_reports.category_trend(months_back=6),
+        "top_items":      await q_reports.top_items_recent(days=90, limit=5),
+        "top_places":     await q_reports.top_places_recent(days=90, limit=5),
+        "free_to_spend":  await q_reports.free_to_spend(user_id),
+    }
 
 
 # ---------- W11: language toggle ----------
